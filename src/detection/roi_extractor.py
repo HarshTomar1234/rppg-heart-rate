@@ -21,11 +21,13 @@ class ROIExtractor:
     
     # ROI regions as percentages of face bounding box
     # Format: (x_start%, y_start%, width%, height%)
+    # Note: Haar Cascade returns face box that often includes forehead
+    # Forehead should be in the TOP portion of the detected face
     ROI_REGIONS = {
-        'forehead': (0.25, 0.05, 0.50, 0.20),  # Upper center of face
-        'left_cheek': (0.05, 0.45, 0.30, 0.25),  # Left cheek
-        'right_cheek': (0.65, 0.45, 0.30, 0.25),  # Right cheek
-        'full_face': (0.10, 0.10, 0.80, 0.80),  # Most of the face
+        'forehead': (0.25, 0.02, 0.50, 0.15),  # Very top of face box
+        'left_cheek': (0.08, 0.55, 0.28, 0.20),  # Left cheek
+        'right_cheek': (0.64, 0.55, 0.28, 0.20),  # Right cheek
+        'full_face': (0.15, 0.20, 0.70, 0.60),  # Central face
     }
     
     def __init__(self, region: str = 'forehead'):

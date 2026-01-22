@@ -188,6 +188,68 @@ async def health():
     return {"status": "ok", "message": "rPPG server running"}
 
 
+# Global monitor for webcam mode
+webcam_monitor: Optional[HeartRateMonitor] = None
+webcam_heart_rates = []
+
+
+@app.post("/process_frame")
+async def process_frame(request: Request):
+    """Process a single frame from webcam."""
+    global webcam_monitor, webcam_heart_rates
+    
+    data = await request.json()
+    frame_b64 = data.get("frame")
+    
+    if not frame_b64:
+        return {"error": "No frame data"}
+    
+    # Decode frame
+    try:
+        frame_data = base64.b64decode(frame_b64)
+        nparr = np.frombuffer(frame_data, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            return {"error": "Could not decode frame"}
+        
+        # Initialize monitor if needed
+        if webcam_monitor is None:
+            webcam_monitor = HeartRateMonitor(fps=30.0, method='chrom')
+            webcam_heart_rates = []
+        
+        # Process frame
+        result = webcam_monitor.process_frame(frame)
+        
+        # Store HR
+        hr = result['heart_rate']
+        if hr > 0:
+            webcam_heart_rates.append(hr)
+            if len(webcam_heart_rates) > 300:  # Keep last 10 seconds at 30 fps
+                webcam_heart_rates.pop(0)
+        
+        avg_hr = np.mean(webcam_heart_rates) if webcam_heart_rates else 0
+        
+        return {
+            "heart_rate": round(hr, 1),
+            "avg_heart_rate": round(avg_hr, 1),
+            "confidence": round(result['confidence'], 2),
+            "status": result['status']
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/reset_webcam")
+async def reset_webcam():
+    """Reset webcam monitor state."""
+    global webcam_monitor, webcam_heart_rates
+    webcam_monitor = None
+    webcam_heart_rates = []
+    return {"status": "reset"}
+
+
 if __name__ == "__main__":
     import uvicorn
     print("Starting rPPG Dashboard Server...")

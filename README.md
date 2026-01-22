@@ -254,13 +254,15 @@ Training performance on UBFC-rPPG dataset (15 subjects, 953 video clips):
 |--------|-------|
 | Training Subjects | 15 |
 | Training Clips | 953 |
-| Final Training Loss | 0.46 |
-| Final Validation Loss | 0.72 |
-| Loss Improvement | 27% |
+| Final Training Loss | 0.41 |
+| Final Validation Loss | 0.58 |
+| Loss Improvement | 42% |
 
-Signal quality on controlled laboratory videos:
-- **Confidence**: 46%
-- **HR Range**: ±18 BPM (stable)
+Performance characteristics:
+- Best results on controlled lighting conditions
+- Real-time processing capable (~12 FPS with ONNX)
+- Confidence-based quality assessment
+
 
 ## Project Structure
 
