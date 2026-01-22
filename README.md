@@ -5,6 +5,8 @@ Remote Photoplethysmography (rPPG) is a technique for measuring blood volume cha
 ## Table of Contents
 
 - [Overview](#overview)
+- [Motivation](#motivation)
+- [Applications](#applications)
 - [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -29,6 +31,61 @@ This project provides a complete pipeline for extracting physiological signals f
 - ONNX model export for optimized deployment
 - Confidence scoring for signal quality assessment
 
+## Motivation
+
+Traditional heart rate monitoring requires physical contact with sensors, wearables, or medical equipment. This creates barriers in several scenarios:
+
+- **Accessibility**: Not everyone has access to medical-grade pulse oximeters
+- **Comfort**: Continuous wearable monitoring can be uncomfortable
+- **Hygiene**: Contact-based sensors in hospitals require frequent sanitization
+- **Cost**: Medical monitoring equipment is expensive
+
+This project explores how computer vision and deep learning can democratize health monitoring by using just a camera—available on every smartphone, laptop, and webcam.
+
+## Applications
+
+### Healthcare and Telemedicine
+
+| Application | Description |
+|-------------|-------------|
+| **Remote Patient Monitoring** | Monitor vital signs during video consultations without specialized equipment |
+| **Neonatal ICU** | Non-invasive monitoring of premature infants where contact sensors are problematic |
+| **Elderly Care** | Ambient monitoring in assisted living facilities without wearables |
+| **Mental Health** | Track physiological stress indicators during therapy sessions |
+
+### Fitness and Wellness
+
+| Application | Description |
+|-------------|-------------|
+| **Smart Mirrors** | Display heart rate during workouts without wearing sensors |
+| **Meditation Apps** | Track heart rate variability for stress and relaxation feedback |
+| **Sleep Studies** | Non-contact monitoring during sleep without uncomfortable sensors |
+
+### Human-Computer Interaction
+
+| Application | Description |
+|-------------|-------------|
+| **Driver Monitoring** | Detect drowsiness and stress levels while driving |
+| **Gaming** | Adaptive gameplay based on player's physiological state |
+| **Video Conferencing** | Real-time wellness indicators during meetings |
+| **Lie Detection** | Research applications in detecting physiological stress |
+
+### Research and Education
+
+| Application | Description |
+|-------------|-------------|
+| **Affective Computing** | Study emotions and their physiological manifestations |
+| **Sports Science** | Non-invasive performance monitoring during training |
+| **Psychology Studies** | Measure arousal without disrupting natural behavior |
+| **Teaching Tool** | Demonstrate signal processing and computer vision concepts |
+
+### Security and Surveillance
+
+| Application | Description |
+|-------------|-------------|
+| **Authentication** | Liveness detection using pulse presence as anti-spoofing |
+| **Crowd Monitoring** | Mass screening for fever or stress in public spaces |
+
 ## Features
 
 | Feature | Description |
@@ -52,8 +109,8 @@ This project provides a complete pipeline for extracting physiological signals f
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/rppg.git
-cd rppg
+git clone https://github.com/HarshTomar1234/rppg-heart-rate.git
+cd rppg-heart-rate
 
 # Create and activate virtual environment
 python -m venv venv
@@ -208,7 +265,7 @@ Signal quality on controlled laboratory videos:
 ## Project Structure
 
 ```
-rppg/
+rppg-heart-rate/
 ├── src/
 │   ├── detection/          # Face detection and ROI extraction
 │   │   ├── face_detector.py
@@ -244,7 +301,7 @@ This project uses the UBFC-rPPG dataset for training and validation.
 If you use the UBFC-rPPG dataset, please cite:
 
 ```bibtex
-@article{bobbia2017unsupervised,
+@article{bobbia2019unsupervised,
   title={Unsupervised skin tissue segmentation for remote photoplethysmography},
   author={Bobbia, S. and Macwan, R. and Benezeth, Y. and Mansouri, A. and Dubois, J.},
   journal={Pattern Recognition Letters},
