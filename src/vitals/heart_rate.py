@@ -1,6 +1,6 @@
 """
 Heart Rate Monitor - Production Grade
-Complete pipeline from video frame to heart rate with improved accuracy
+Uses MediaPipe Face Mesh for accurate forehead ROI detection
 """
 
 import cv2
@@ -8,7 +8,7 @@ import numpy as np
 from typing import Tuple, Optional, Dict, Any
 from collections import deque
 
-from ..detection import FaceDetector, ROIExtractor
+from ..detection.mediapipe_detector import MediaPipeDetector
 from ..processing import SignalProcessor, FFTAnalyzer
 
 
@@ -16,20 +16,16 @@ class HeartRateMonitor:
     """
     Production-grade heart rate monitoring from video.
     
-    Key improvements over basic version:
-    - Uses CHROM/POS methods for robust signal extraction
-    - Adaptive method selection based on signal quality
-    - Better smoothing with outlier rejection
-    - Confidence-based filtering
+    Uses MediaPipe Face Mesh for accurate landmark-based ROI detection.
     """
     
     def __init__(
         self,
         fps: float = 30.0,
-        buffer_seconds: float = 6.0,  # Increased for better FFT resolution
+        buffer_seconds: float = 6.0,
         roi_region: str = 'forehead',
         smoothing_window: int = 7,
-        method: str = 'chrom'  # 'chrom', 'pos', or 'auto'
+        method: str = 'chrom'
     ):
         """
         Initialize heart rate monitor.
@@ -37,17 +33,22 @@ class HeartRateMonitor:
         Args:
             fps: Video frames per second
             buffer_seconds: Seconds of data to buffer
-            roi_region: Face region to use
+            roi_region: Face region to use (forehead, left_cheek, right_cheek)
             smoothing_window: Number of readings to smooth over
             method: Signal extraction method ('chrom', 'pos', 'auto')
         """
         self.fps = fps
         self.buffer_size = int(fps * buffer_seconds)
         self.method = method
+        self.roi_region = roi_region
         
-        # Initialize components
-        self.face_detector = FaceDetector()
-        self.roi_extractor = ROIExtractor(region=roi_region)
+        # MediaPipe detector (replaces Haar cascade)
+        self.detector = MediaPipeDetector(
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        
+        # Signal processing
         self.signal_processor = SignalProcessor(
             buffer_size=self.buffer_size,
             fps=fps,
@@ -55,7 +56,7 @@ class HeartRateMonitor:
         )
         self.fft_analyzer = FFTAnalyzer(fps=fps)
         
-        # For smoothing with outlier rejection
+        # Smoothing buffers
         self.hr_buffer = deque(maxlen=smoothing_window)
         self.confidence_buffer = deque(maxlen=smoothing_window)
         
@@ -64,13 +65,14 @@ class HeartRateMonitor:
         self.last_detection = None
         self.last_valid_hr = 0.0
         
-        # Quality thresholds (lowered for real-world robustness)
-        self.min_confidence = 0.05  # Accept readings with low confidence but apply smoothing
-        self.hr_change_threshold = 30  # Max BPM change per reading
+        # Quality thresholds
+        self.min_confidence = 0.05
+        self.hr_change_threshold = 30
+
         
     def process_frame(self, frame: np.ndarray) -> Dict[str, Any]:
         """
-        Process a single video frame.
+        Process a single video frame using MediaPipe landmarks.
         
         Args:
             frame: BGR image from video
@@ -80,8 +82,8 @@ class HeartRateMonitor:
         """
         self.frame_count += 1
         
-        # Detect face
-        detection = self.face_detector.detect(frame)
+        # Detect face with MediaPipe
+        detection = self.detector.detect(frame)
         
         if detection is None:
             return self._create_result(
@@ -90,16 +92,14 @@ class HeartRateMonitor:
             
         self.last_detection = detection
         
-        # Extract ROI
-        roi = self.roi_extractor.extract(frame, detection['bbox'])
+        # Get mean RGB from forehead region using landmarks
+        mean_rgb = self.detector.get_mean_color(frame, detection, self.roi_region)
         
-        if roi is None or roi.size == 0:
+        if mean_rgb == (0.0, 0.0, 0.0):
             return self._create_result(
                 frame, detection, 0.0, 0.0, True, 'ROI extraction failed'
             )
-            
-        # Get mean RGB
-        mean_rgb = self.roi_extractor.get_mean_color(roi)
+
         
         # Add to signal processor
         self.signal_processor.add_sample(mean_rgb)
@@ -200,10 +200,9 @@ class HeartRateMonitor:
         
         annotated = frame.copy()
         
-        # Draw face detection
+        # Draw face detection with MediaPipe
         if detection is not None:
-            annotated = self.face_detector.draw_detection(annotated, detection)
-            annotated = self.roi_extractor.draw_roi(annotated, detection['bbox'])
+            annotated = self.detector.draw_detection(annotated, detection, show_forehead=True)
         
         # Add HR text
         if heart_rate > 0:
@@ -237,6 +236,7 @@ class HeartRateMonitor:
             result['method'] = method
             
         return result
+
     
     def reset(self):
         """Reset the monitor."""
@@ -259,10 +259,11 @@ class HeartRateMonitor:
 
 # Quick test
 if __name__ == "__main__":
-    print("Heart Rate Monitor - Production Grade")
+    print("Heart Rate Monitor - MediaPipe Edition")
     print("=" * 50)
-    print("Improvements:")
+    print("Features:")
+    print("  - MediaPipe Face Mesh for precise detection")
+    print("  - Landmark-based forehead ROI extraction")
     print("  - CHROM/POS signal extraction methods")
-    print("  - Auto method selection based on quality")
     print("  - Outlier rejection and robust smoothing")
-    print("  - Confidence-based filtering")
+
