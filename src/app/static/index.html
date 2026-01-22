@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>rPPG - Contactless Heart Rate Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            color: #fff;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            text-align: center;
+            padding: 30px 0;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(90deg, #00d4ff, #7c3aed, #ff006e);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            color: #94a3b8;
+            font-size: 1.1rem;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .video-section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .video-container {
+            background: #000;
+            border-radius: 15px;
+            overflow: hidden;
+            aspect-ratio: 16/9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .video-container img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        .upload-zone {
+            border: 2px dashed rgba(255, 255, 255, 0.3);
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .upload-zone:hover {
+            border-color: #00d4ff;
+            background: rgba(0, 212, 255, 0.1);
+        }
+
+        .upload-zone.dragover {
+            border-color: #7c3aed;
+            background: rgba(124, 58, 237, 0.2);
+        }
+
+        .upload-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+
+        .stats-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            text-align: center;
+        }
+
+        .stat-card.primary {
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.2), rgba(124, 58, 237, 0.2));
+            border: 1px solid rgba(0, 212, 255, 0.3);
+        }
+
+        .stat-value {
+            font-size: 3rem;
+            font-weight: bold;
+            background: linear-gradient(90deg, #00d4ff, #7c3aed);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label {
+            color: #94a3b8;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+
+        .stat-unit {
+            font-size: 1.2rem;
+            color: #64748b;
+        }
+
+        .confidence-bar {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00d4ff, #7c3aed);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        .progress-bar {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            height: 20px;
+            margin-top: 15px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00d4ff, #7c3aed);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            margin-top: 10px;
+        }
+
+        .status-ready {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .status-processing {
+            background: rgba(0, 212, 255, 0.2);
+            color: #00d4ff;
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .heart-animation {
+            display: inline-block;
+            animation: heartbeat 1s infinite;
+        }
+
+        @keyframes heartbeat {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        .results-panel {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            margin-top: 15px;
+        }
+
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+
+        .result-item {
+            text-align: center;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+
+        .result-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #00d4ff;
+        }
+
+        .result-label {
+            font-size: 0.8rem;
+            color: #94a3b8;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .disclaimer {
+            text-align: center;
+            color: #64748b;
+            font-size: 0.8rem;
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(255, 193, 7, 0.1);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 193, 7, 0.2);
+        }
+
+        .disclaimer strong {
+            color: #ffc107;
+        }
+
+        @media (max-width: 900px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>💓 rPPG Heart Rate Monitor</h1>
+            <p>Contactless vital signs detection using computer vision</p>
+        </header>
+
+        <div class="main-content">
+            <div class="video-section">
+                <div class="video-container" id="videoContainer">
+                    <div class="upload-zone" id="uploadZone">
+                        <div class="upload-icon">📹</div>
+                        <h3>Drop video here or click to upload</h3>
+                        <p style="color: #64748b; margin-top: 10px">Supports MP4, AVI, MOV</p>
+                        <input type="file" id="fileInput" accept="video/*">
+                    </div>
+                    <img id="videoFrame" class="hidden" alt="Video frame">
+                </div>
+                <div class="progress-bar hidden" id="progressBar">
+                    <div class="progress-fill" id="progressFill">0%</div>
+                </div>
+                <div id="statusContainer" style="text-align: center; margin-top: 15px;">
+                    <span class="status-badge status-ready" id="statusBadge">Ready to upload</span>
+                </div>
+                
+                <div class="results-panel hidden" id="resultsPanel">
+                    <h3 style="margin-bottom: 15px;">📊 Final Results</h3>
+                    <div class="results-grid">
+                        <div class="result-item">
+                            <div class="result-value" id="avgHR">--</div>
+                            <div class="result-label">Average HR</div>
+                        </div>
+                        <div class="result-item">
+                            <div class="result-value" id="minHR">--</div>
+                            <div class="result-label">Min HR</div>
+                        </div>
+                        <div class="result-item">
+                            <div class="result-value" id="maxHR">--</div>
+                            <div class="result-label">Max HR</div>
+                        </div>
+                        <div class="result-item">
+                            <div class="result-value" id="measurements">--</div>
+                            <div class="result-label">Measurements</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stats-panel">
+                <div class="stat-card primary">
+                    <div class="heart-animation">❤️</div>
+                    <div class="stat-value" id="currentHR">--</div>
+                    <div class="stat-unit">BPM</div>
+                    <div class="stat-label">Current Heart Rate</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-value" id="avgHRLive">--</div>
+                    <div class="stat-unit">BPM</div>
+                    <div class="stat-label">Average Heart Rate</div>
+                </div>
+
+                <div class="stat-card">
+                    <div style="margin-bottom: 5px; color: #94a3b8;">Signal Confidence</div>
+                    <div class="stat-value" style="font-size: 2rem;" id="confidence">--%</div>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" id="confidenceFill" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div style="margin-bottom: 10px; color: #94a3b8;">Processing Status</div>
+                    <div id="processingStatus" style="font-size: 1.1rem;">Waiting for video...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="disclaimer">
+            <strong>⚠️ Disclaimer:</strong> This is a research/demonstration project. 
+            Heart rate readings are <strong>not medically validated</strong> and should 
+            <strong>not be used for medical decisions</strong>.
+        </div>
+    </div>
+
+    <script>
+        const uploadZone = document.getElementById('uploadZone');
+        const fileInput = document.getElementById('fileInput');
+        const videoContainer = document.getElementById('videoContainer');
+        const videoFrame = document.getElementById('videoFrame');
+        const progressBar = document.getElementById('progressBar');
+        const progressFill = document.getElementById('progressFill');
+        const statusBadge = document.getElementById('statusBadge');
+        const resultsPanel = document.getElementById('resultsPanel');
+
+        let ws = null;
+
+        // Drag and drop
+        uploadZone.addEventListener('click', () => fileInput.click());
+        
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('dragover');
+        });
+
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith('video/')) {
+                uploadVideo(file);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files[0]) {
+                uploadVideo(e.target.files[0]);
+            }
+        });
+
+        async function uploadVideo(file) {
+            updateStatus('Uploading...', 'processing');
+            
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    updateStatus('Error: ' + data.error, 'ready');
+                    return;
+                }
+
+                // Start processing
+                processVideo(data.path);
+                
+            } catch (error) {
+                updateStatus('Upload failed', 'ready');
+                console.error(error);
+            }
+        }
+
+        function processVideo(videoPath) {
+            updateStatus('Connecting...', 'processing');
+            
+            // Show video frame
+            uploadZone.classList.add('hidden');
+            videoFrame.classList.remove('hidden');
+            progressBar.classList.remove('hidden');
+            
+            ws = new WebSocket(`ws://${window.location.host}/ws/process`);
+            
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ video_path: videoPath }));
+                updateStatus('Processing...', 'processing');
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'frame') {
+                    // Update video frame
+                    videoFrame.src = 'data:image/jpeg;base64,' + data.frame;
+                    
+                    // Update stats
+                    document.getElementById('currentHR').textContent = data.heart_rate || '--';
+                    document.getElementById('avgHRLive').textContent = data.avg_heart_rate || '--';
+                    document.getElementById('confidence').textContent = 
+                        (data.confidence * 100).toFixed(0) + '%';
+                    document.getElementById('confidenceFill').style.width = 
+                        (data.confidence * 100) + '%';
+                    document.getElementById('processingStatus').textContent = data.status;
+                    
+                    // Update progress
+                    progressFill.style.width = data.progress + '%';
+                    progressFill.textContent = data.progress + '%';
+                    
+                } else if (data.type === 'complete') {
+                    updateStatus('Complete!', 'ready');
+                    
+                    // Show results
+                    resultsPanel.classList.remove('hidden');
+                    document.getElementById('avgHR').textContent = data.avg_heart_rate;
+                    document.getElementById('minHR').textContent = data.min_heart_rate;
+                    document.getElementById('maxHR').textContent = data.max_heart_rate;
+                    document.getElementById('measurements').textContent = data.total_measurements;
+                    
+                } else if (data.error) {
+                    updateStatus('Error: ' + data.error, 'ready');
+                }
+            };
+            
+            ws.onerror = (error) => {
+                updateStatus('Connection error', 'ready');
+                console.error(error);
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket closed');
+            };
+        }
+
+        function updateStatus(text, type) {
+            statusBadge.textContent = text;
+            statusBadge.className = 'status-badge status-' + type;
+        }
+    </script>
+</body>
+</html>
