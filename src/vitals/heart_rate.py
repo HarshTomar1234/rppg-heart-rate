@@ -1,6 +1,7 @@
 """
 Heart Rate Monitor - Production Grade
 Uses MediaPipe Face Mesh for accurate forehead ROI detection
+With Kalman filtering, spike rejection, and low-light compensation
 """
 
 import cv2
@@ -10,6 +11,8 @@ from collections import deque
 
 from ..detection.mediapipe_detector import MediaPipeDetector
 from ..processing import SignalProcessor, FFTAnalyzer
+from ..processing.kalman_filter import KalmanHRFilter
+from ..processing.low_light import LowLightEnhancer
 
 
 class HeartRateMonitor:
@@ -17,6 +20,8 @@ class HeartRateMonitor:
     Production-grade heart rate monitoring from video.
     
     Uses MediaPipe Face Mesh for accurate landmark-based ROI detection.
+    Includes Kalman filtering for smooth, stable readings.
+    Low-light enhancement for webcam in poor conditions.
     """
     
     def __init__(
@@ -24,8 +29,9 @@ class HeartRateMonitor:
         fps: float = 30.0,
         buffer_seconds: float = 6.0,
         roi_region: str = 'forehead',
-        smoothing_window: int = 7,
-        method: str = 'chrom'
+        smoothing_window: int = 12,
+        method: str = 'chrom',
+        enable_low_light: bool = True
     ):
         """
         Initialize heart rate monitor.
@@ -36,13 +42,15 @@ class HeartRateMonitor:
             roi_region: Face region to use (forehead, left_cheek, right_cheek)
             smoothing_window: Number of readings to smooth over
             method: Signal extraction method ('chrom', 'pos', 'auto')
+            enable_low_light: Enable low-light frame enhancement
         """
         self.fps = fps
         self.buffer_size = int(fps * buffer_seconds)
         self.method = method
         self.roi_region = roi_region
+        self.enable_low_light = enable_low_light
         
-        # MediaPipe detector (replaces Haar cascade)
+        # MediaPipe detector
         self.detector = MediaPipeDetector(
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5
@@ -56,6 +64,25 @@ class HeartRateMonitor:
         )
         self.fft_analyzer = FFTAnalyzer(fps=fps)
         
+        # Kalman filter with aggressive spike rejection
+        self.kalman_filter = KalmanHRFilter(
+            initial_hr=70.0,
+            process_noise=0.5,        # Low for stability
+            measurement_noise=15.0,   # High for noise rejection
+            spike_threshold=15.0,     # Tight threshold
+            hard_clamp_range=25.0     # Never deviate more than ±25 BPM
+        )
+        
+        # Low-light enhancer
+        if enable_low_light:
+            self.low_light = LowLightEnhancer(
+                clip_limit=2.5,
+                brightness_threshold=70.0,  # Enhance if darker than this
+                target_brightness=110.0
+            )
+        else:
+            self.low_light = None
+        
         # Smoothing buffers
         self.hr_buffer = deque(maxlen=smoothing_window)
         self.confidence_buffer = deque(maxlen=smoothing_window)
@@ -65,10 +92,10 @@ class HeartRateMonitor:
         self.last_detection = None
         self.last_valid_hr = 0.0
         
-        # Quality thresholds
-        self.min_confidence = 0.05
-        self.hr_change_threshold = 30
-
+        # Quality thresholds - relaxed for webcam
+        self.min_confidence = 0.10   # Lowered for poor lighting
+        self.hr_change_threshold = 15  # Tighter control
+        self.confidence_gate = 0.50   # Lowered from 0.6 for webcam
         
     def process_frame(self, frame: np.ndarray) -> Dict[str, Any]:
         """
@@ -82,6 +109,12 @@ class HeartRateMonitor:
         """
         self.frame_count += 1
         
+        # Apply low-light enhancement if enabled
+        if self.low_light is not None:
+            brightness, needs_enhancement = self.low_light.analyze_brightness(frame)
+            if needs_enhancement:
+                frame = self.low_light.enhance(frame)
+        
         # Detect face with MediaPipe
         detection = self.detector.detect(frame)
         
@@ -92,13 +125,16 @@ class HeartRateMonitor:
             
         self.last_detection = detection
         
-        # Get mean RGB from forehead region using landmarks
-        mean_rgb = self.detector.get_mean_color(frame, detection, self.roi_region)
+        # Get mean RGB from multiple face regions (forehead + cheeks)
+        # Multi-ROI fusion provides more robust signal with redundancy
+        mean_rgb = self.detector.get_multi_roi_colors(frame, detection)
         
         if mean_rgb == (0.0, 0.0, 0.0):
             return self._create_result(
                 frame, detection, 0.0, 0.0, True, 'ROI extraction failed'
             )
+
+
 
         
         # Add to signal processor
@@ -144,26 +180,30 @@ class HeartRateMonitor:
         )
     
     def _smooth_heart_rate(self, hr: float, confidence: float) -> float:
-        """Apply smoothing with outlier rejection."""
+        """
+        Apply Kalman filtering with outlier rejection.
         
-        # Reject low confidence readings
+        The Kalman filter provides:
+        - Smooth, stable readings
+        - Automatic spike rejection
+        - Confidence-adaptive noise model
+        """
+        
+        # Reject very low confidence readings entirely
         if confidence < self.min_confidence:
             return self.last_valid_hr if self.last_valid_hr > 0 else 0.0
         
-        # Reject sudden large changes (likely noise)
-        if self.last_valid_hr > 0:
-            if abs(hr - self.last_valid_hr) > self.hr_change_threshold:
-                # Likely an outlier, use weighted average
-                hr = 0.7 * self.last_valid_hr + 0.3 * hr
+        # Apply Kalman filter (handles spike rejection internally)
+        kalman_hr = self.kalman_filter.update(hr, confidence)
         
-        # Add to buffer
-        self.hr_buffer.append(hr)
+        # Add to buffer for weighted averaging
+        self.hr_buffer.append(kalman_hr)
         self.confidence_buffer.append(confidence)
         
         if len(self.hr_buffer) == 0:
             return 0.0
         
-        # Weighted average based on confidence
+        # Weighted average based on confidence for extra stability
         hrs = np.array(self.hr_buffer)
         confs = np.array(self.confidence_buffer)
         
@@ -184,6 +224,7 @@ class HeartRateMonitor:
         self.last_valid_hr = smoothed_hr
         
         return smoothed_hr
+
     
     def _create_result(
         self,
