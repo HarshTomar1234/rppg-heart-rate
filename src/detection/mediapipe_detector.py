@@ -164,6 +164,57 @@ class MediaPipeDetector:
         # Return as RGB
         return (mean_bgr[2], mean_bgr[1], mean_bgr[0])
     
+    def get_multi_roi_colors(self, frame: np.ndarray, detection: Dict) -> Tuple[float, float, float]:
+        """
+        Get fused RGB signal from multiple face regions.
+        
+        Uses weighted average of forehead (primary) and both cheeks (secondary)
+        for more robust signal extraction.
+        
+        Args:
+            frame: Original BGR frame
+            detection: Detection dict from detect()
+            
+        Returns:
+            Fused mean (R, G, B) values
+        """
+        if detection is None:
+            return (0.0, 0.0, 0.0)
+        
+        # Get colors from each region
+        forehead = self.get_mean_color(frame, detection, 'forehead')
+        left_cheek = self.get_mean_color(frame, detection, 'left_cheek')
+        right_cheek = self.get_mean_color(frame, detection, 'right_cheek')
+        
+        # Weights: forehead has strongest signal, cheeks provide redundancy
+        # Based on rPPG literature, forehead has best SNR
+        weights = [0.5, 0.25, 0.25]  # forehead, left, right
+        
+        # Check for invalid regions (might be occluded)
+        regions = [forehead, left_cheek, right_cheek]
+        valid_regions = []
+        valid_weights = []
+        
+        for i, (r, g, b) in enumerate(regions):
+            if r > 0 or g > 0 or b > 0:  # Valid if any color detected
+                valid_regions.append((r, g, b))
+                valid_weights.append(weights[i])
+        
+        if not valid_regions:
+            return (0.0, 0.0, 0.0)
+        
+        # Normalize weights
+        total_weight = sum(valid_weights)
+        valid_weights = [w / total_weight for w in valid_weights]
+        
+        # Weighted average
+        fused_r = sum(r * w for (r, g, b), w in zip(valid_regions, valid_weights))
+        fused_g = sum(g * w for (r, g, b), w in zip(valid_regions, valid_weights))
+        fused_b = sum(b * w for (r, g, b), w in zip(valid_regions, valid_weights))
+        
+        return (fused_r, fused_g, fused_b)
+
+    
     def draw_detection(self, frame: np.ndarray, detection: Dict, 
                        show_mesh: bool = False,
                        show_forehead: bool = True) -> np.ndarray:
