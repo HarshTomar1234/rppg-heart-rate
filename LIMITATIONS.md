@@ -143,6 +143,36 @@ Once all subjects from UBFC-rPPG Dataset-2 are downloaded:
 4. **Stress Detection** - Combine HRV with facial expressions for stress assessment
 5. **Multi-Person Detection** - Track heart rate of multiple people simultaneously
 
+### Phase 6: ONNX and TensorRT Optimization (Learning Priority)
+
+#### ONNX (Open Neural Network Exchange)
+- [ ] Learn ONNX export from PyTorch models
+- [ ] Export trained PhysNet to ONNX format
+- [ ] Integrate ONNX Runtime for CPU inference
+- [ ] Benchmark ONNX vs PyTorch inference speed
+- [ ] Add ONNX model loading in HeartRateMonitor
+
+#### TensorRT (GPU Acceleration)
+- [ ] Learn TensorRT basics and optimization techniques
+- [ ] Convert ONNX model to TensorRT engine
+- [ ] Implement FP16/INT8 quantization for faster inference
+- [ ] Benchmark TensorRT vs ONNX Runtime performance
+- [ ] Add GPU inference option in dashboard
+
+#### Expected Performance Gains
+| Backend | Expected FPS | Hardware |
+|---------|-------------|----------|
+| PyTorch (CPU) | 5-8 FPS | Laptop CPU |
+| ONNX Runtime (CPU) | 12-15 FPS | Laptop CPU |
+| TensorRT (GPU) | 30-50 FPS | NVIDIA GPU |
+
+#### Learning Resources
+- [ONNX Official Docs](https://onnx.ai/)
+- [PyTorch ONNX Export Guide](https://pytorch.org/docs/stable/onnx.html)
+- [TensorRT Developer Guide](https://docs.nvidia.com/deeplearning/tensorrt/)
+- [ONNX Runtime Python API](https://onnxruntime.ai/docs/)
+
+
 
 ---
 
