@@ -248,7 +248,25 @@ Options:
 
 ## Results
 
-Training performance on UBFC-rPPG dataset (15 subjects, 953 video clips):
+### Demo Screenshots
+
+#### Application Interface
+![Application Interface](result_imgs/app_interface.png)
+
+#### Heart Rate Detection in Action
+![User Detection](result_imgs/user.png)
+
+#### Session Report Chart
+![Heart Rate Chart](result_imgs/user_chart.png)
+
+### Accuracy Metrics
+
+| Dataset | Ground Truth Mean | System Mean | Error | Confidence |
+|---------|------------------|-------------|-------|------------|
+| UBFC Dataset-1 Subject 11 | 77.7 BPM | 78.0 BPM | **0.3 BPM** | 54% |
+| UBFC Dataset-2 Subject 1 | 106.7 BPM | 105.3 BPM | **1.4 BPM** | 91% |
+
+### Training Performance
 
 | Metric | Value |
 |--------|-------|
@@ -258,10 +276,13 @@ Training performance on UBFC-rPPG dataset (15 subjects, 953 video clips):
 | Final Validation Loss | 0.58 |
 | Loss Improvement | 42% |
 
-Performance characteristics:
-- Best results on controlled lighting conditions
+### Performance Characteristics
+- Mean HR accuracy: **< 2 BPM error** on controlled datasets
 - Real-time processing capable (~12 FPS with ONNX)
 - Confidence-based quality assessment
+- Best results with good lighting conditions
+
+> **Note**: See [LIMITATIONS.md](LIMITATIONS.md) for detailed accuracy limitations and future improvements.
 
 
 ## Project Structure
