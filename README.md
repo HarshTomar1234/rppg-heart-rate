@@ -1,4 +1,14 @@
+<p align="center">
+  <img src="result_imgs/rppg_logo.png" alt="rPPG Logo" width="200"/>
+</p>
+
 # rPPG: Remote Photoplethysmography for Contactless Heart Rate Detection
+
+<p align="center">
+  <em>Contactless heart rate detection using computer vision and deep learning</em>
+</p>
+
+---
 
 Remote Photoplethysmography (rPPG) is a technique for measuring blood volume changes in the microvascular bed of tissue using a standard camera. This repository implements a production-grade rPPG system combining classical signal processing methods with deep learning for accurate, contactless heart rate estimation.
 
