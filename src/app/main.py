@@ -16,11 +16,16 @@ from pathlib import Path
 import tempfile
 import time
 from typing import Optional
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend
+import matplotlib.pyplot as plt
+from io import BytesIO
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.vitals import HeartRateMonitor
+
 
 app = FastAPI(
     title="rPPG - Contactless Heart Rate Monitor",
@@ -250,7 +255,77 @@ async def reset_webcam():
     return {"status": "reset"}
 
 
+@app.post("/export_chart")
+async def export_chart(request: Request):
+    """
+    Export heart rate chart as PNG image.
+    Generates a report similar to physnet_results.png
+    """
+    try:
+        data = await request.json()
+        hr_timeline = data.get("hr_timeline", [])
+        timestamps = data.get("timestamps", [])
+        avg_hr = data.get("avg_hr", 0)
+        min_hr = data.get("min_hr", 0)
+        max_hr = data.get("max_hr", 0)
+        
+        if not hr_timeline:
+            return {"error": "No data to export"}
+        
+        # Create figure with 2 subplots
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+        fig.suptitle('rPPG Heart Rate Detection Report', fontsize=16, fontweight='bold')
+        
+        # Plot 1: Heart Rate Timeline
+        ax1.plot(timestamps, hr_timeline, 'b-', linewidth=2, label='Heart Rate')
+        ax1.axhline(y=avg_hr, color='r', linestyle='--', linewidth=1.5, label=f'Avg: {avg_hr:.1f} BPM')
+        ax1.fill_between(timestamps, min_hr, max_hr, alpha=0.2, color='blue')
+        ax1.set_xlabel('Time (seconds)', fontsize=12)
+        ax1.set_ylabel('Heart Rate (BPM)', fontsize=12)
+        ax1.set_title('Heart Rate Over Time', fontsize=14)
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc='upper right')
+        ax1.set_ylim(40, 180)
+        
+        # Plot 2: Signal Quality Info
+        ax2.text(0.5, 0.7, f'Session Summary', ha='center', va='center', 
+                fontsize=16, fontweight='bold', transform=ax2.transAxes)
+        ax2.text(0.5, 0.5, f'Average HR: {avg_hr:.1f} BPM', ha='center', va='center',
+                fontsize=14, transform=ax2.transAxes)
+        ax2.text(0.5, 0.35, f'Range: {min_hr:.1f} - {max_hr:.1f} BPM', ha='center', va='center',
+                fontsize=12, transform=ax2.transAxes)
+        ax2.text(0.5, 0.2, f'Samples: {len(hr_timeline)}', ha='center', va='center',
+                fontsize=12, transform=ax2.transAxes)
+        ax2.text(0.5, 0.05, 'Research demonstration only. Not medically validated.', 
+                ha='center', va='center', fontsize=10, style='italic', 
+                transform=ax2.transAxes, color='gray')
+        ax2.axis('off')
+        
+        plt.tight_layout()
+        
+        # Save to bytes
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        plt.close(fig)
+        
+        # Save to temp file and return
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        temp_file.write(buf.getvalue())
+        temp_file.close()
+        
+        return FileResponse(
+            temp_file.name,
+            media_type="image/png",
+            filename=f"rppg_report_{int(time.time())}.png"
+        )
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
 if __name__ == "__main__":
+
     import uvicorn
     print("Starting rPPG Dashboard Server...")
     print("Open http://localhost:8000 in your browser")
