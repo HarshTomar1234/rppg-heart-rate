@@ -430,13 +430,17 @@
                 <button class="btn btn-danger" id="stopBtn" style="display: none;">
                     Stop Camera
                 </button>
-                <button class="btn btn-secondary" id="downloadBtn" style="display: none;">
-                    Download
+                <button class="btn btn-secondary" id="downloadJSONBtn" style="display: none;">
+                    JSON
+                </button>
+                <button class="btn btn-secondary" id="downloadChartBtn" style="display: none;">
+                    Chart PNG
                 </button>
                 <button class="btn btn-secondary" id="resetBtn" style="display: none;">
                     New Session
                 </button>
             </div>
+
         </header>
 
         <div class="main-grid">
@@ -555,7 +559,8 @@
         const resultsSection = document.getElementById('resultsSection');
         const stopBtn = document.getElementById('stopBtn');
         const resetBtn = document.getElementById('resetBtn');
-        const downloadBtn = document.getElementById('downloadBtn');
+        const downloadJSONBtn = document.getElementById('downloadJSONBtn');
+        const downloadChartBtn = document.getElementById('downloadChartBtn');
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
 
@@ -594,7 +599,7 @@
                         x: { display: false },
                         y: {
                             min: 50,
-                            max: 130,
+                            max: 180,
                             grid: { color: '#f0f0f0' },
                             ticks: { font: { size: 10 }, color: '#999' }
                         }
@@ -611,7 +616,9 @@
         });
         stopBtn.addEventListener('click', stopWebcam);
         resetBtn.addEventListener('click', resetApp);
-        downloadBtn.addEventListener('click', downloadResults);
+        downloadJSONBtn.addEventListener('click', downloadJSON);
+        downloadChartBtn.addEventListener('click', downloadChart);
+
 
         async function startWebcam() {
             try {
@@ -627,7 +634,8 @@
                 chartSection.classList.add('active');
                 stopBtn.style.display = 'block';
                 resetBtn.style.display = 'block';
-                downloadBtn.style.display = 'block';
+                downloadJSONBtn.style.display = 'block';
+                downloadChartBtn.style.display = 'block';
 
                 isWebcamMode = true;
                 hrData = [];
@@ -667,18 +675,32 @@
                     const hr = parseFloat(data.heart_rate);
                     const conf = parseFloat(data.confidence) || 0;
 
-                    document.getElementById('currentHR').textContent = hr > 0 ? Math.round(hr) : '--';
+                    // Confidence gate: Hide readings when confidence < 50% (lowered for webcam)
+                    const CONFIDENCE_GATE = 0.5;
+                    const showReading = conf >= CONFIDENCE_GATE && hr > 40 && hr < 180;
+
+                    document.getElementById('currentHR').textContent = showReading ? Math.round(hr) : '--';
                     document.getElementById('avgHRLive').textContent = Math.round(data.avg_heart_rate) || '--';
                     document.getElementById('confidence').textContent = Math.round(conf * 100);
                     document.getElementById('confidenceFill').style.width = (conf * 100) + '%';
 
-                    if (hr > 40 && hr < 180) {
+                    // Add low signal indicator
+                    const confBar = document.getElementById('confidenceFill');
+                    if (conf < CONFIDENCE_GATE) {
+                        confBar.style.background = '#fbbf24'; // Yellow for low signal
+                    } else {
+                        confBar.style.background = '#10b981'; // Green for good signal
+                    }
+
+                    // Only add to chart if good reading
+                    if (showReading) {
                         hrData.push(hr);
                         if (hrData.length > 60) hrData.shift();
                         chart.data.labels = hrData.map((_, i) => i);
                         chart.data.datasets[0].data = hrData;
                         chart.update('none');
                     }
+
 
                     // Update results
                     if (hrData.length > 0) {
@@ -790,7 +812,8 @@
                     updateStatus('Complete', 'complete');
                     progressSection.classList.remove('active');
                     resultsSection.classList.add('active');
-                    downloadBtn.style.display = 'block';
+                    downloadJSONBtn.style.display = 'block';
+                    downloadChartBtn.style.display = 'block';
 
                     resultsData = {
                         avg: data.avg_heart_rate,
@@ -837,7 +860,8 @@
             resultsSection.classList.remove('active');
             stopBtn.style.display = 'none';
             resetBtn.style.display = 'none';
-            downloadBtn.style.display = 'none';
+            downloadJSONBtn.style.display = 'none';
+            downloadChartBtn.style.display = 'none';
 
             // Reset values
             document.getElementById('currentHR').textContent = '--';
@@ -859,7 +883,7 @@
             fetch('/reset_webcam', { method: 'POST' });
         }
 
-        function downloadResults() {
+        function downloadJSON() {
             if (!resultsData) return;
 
             const output = {
@@ -881,6 +905,44 @@
             a.click();
             URL.revokeObjectURL(url);
         }
+
+        async function downloadChart() {
+            if (!resultsData) return;
+
+            try {
+                const timestamps = resultsData.hrData.map((_, i) => i * 0.1);
+
+                const response = await fetch('/export_chart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        hr_timeline: resultsData.hrData,
+                        timestamps: timestamps,
+                        avg_hr: resultsData.avg,
+                        min_hr: resultsData.min,
+                        max_hr: resultsData.max
+                    })
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `rppg_chart_${Date.now()}.png`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                } else {
+                    console.error('Export failed');
+                    alert('Chart export failed. Please try again.');
+                }
+            } catch (error) {
+                console.error('Download error:', error);
+                alert('Download error: ' + error.message);
+            }
+        }
+
+
     </script>
 </body>
 
