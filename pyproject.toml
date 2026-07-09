@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rppg-heart-rate"
+version = "0.1.0"
+description = "Contactless heart rate detection from facial video using rPPG (CHROM, POS, PhysNet)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Harsh Tomar" }]
+keywords = ["rppg", "heart-rate", "computer-vision", "physiological-signals", "photoplethysmography"]
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "ruff==0.8.4",
+    "black==24.10.0",
+    "pre-commit==3.8.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/HarshTomar1234/rppg-heart-rate"
+Repository = "https://github.com/HarshTomar1234/rppg-heart-rate"
+
+# Runtime dependencies are kept in requirements.txt as the single source of truth.
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+# The package currently lives under the `src.*` namespace (kept as-is in Phase 0;
+# renaming to a real distribution package is a deferred refactor).
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["result_imgs", "models", "data"]
+
+[tool.ruff.lint]
+# Conservative, high-signal rule set; expand in later phases.
+select = ["E", "F", "W", "I", "UP", "B"]
+# E501 (line length) is handled by black; B008 fires on FastAPI's Depends()/File() idiom.
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# Entrypoint scripts and one test intentionally run bootstrap logic (sys.path setup /
+# pytest.importorskip) before importing the package, which trips E402.
+"demo_video.py" = ["E402"]
+"src/app/main.py" = ["E402"]
+"scripts/*.py" = ["E402"]
+"tests/test_method_wiring.py" = ["E402"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "integration: tests needing camera/model download/network (excluded from CI by default)",
+]
