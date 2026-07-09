@@ -8,7 +8,7 @@ try:
         PhysNetLite,
         PhysNetPreprocessor,
         PhysNetInference,
-        TORCH_AVAILABLE
+        TORCH_AVAILABLE,
     )
 except ImportError:
     TORCH_AVAILABLE = False
@@ -17,10 +17,4 @@ except ImportError:
     PhysNetPreprocessor = None
     PhysNetInference = None
 
-__all__ = [
-    "PhysNet3D",
-    "PhysNetLite", 
-    "PhysNetPreprocessor",
-    "PhysNetInference",
-    "TORCH_AVAILABLE"
-]
+__all__ = ["PhysNet3D", "PhysNetLite", "PhysNetPreprocessor", "PhysNetInference", "TORCH_AVAILABLE"]

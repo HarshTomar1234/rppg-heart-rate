@@ -8,6 +8,19 @@ venv/
 env/
 .venv/
 
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
 # IDE
 .vscode/
 .idea/
@@ -26,6 +39,10 @@ models/*.onnx
 # Datasets (not included in repo)
 datasets/
 docs/
+
+# Internal planning notes (local only, not part of the public repo)
+specs/
+phases/
 
 # Jupyter
 .ipynb_checkpoints/

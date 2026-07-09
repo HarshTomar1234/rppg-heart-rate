@@ -3,23 +3,23 @@ Signal Processing Module
 Advanced rPPG signal extraction and analysis
 """
 
+from .fft_analyzer import FFTAnalyzer, WelchAnalyzer
 from .filters import (
     BandpassFilter,
-    SignalProcessor,
     CHROMMethod,
-    POSMethod,
     GreenChannelMethod,
-    SignalQuality
+    POSMethod,
+    SignalProcessor,
+    SignalQuality,
 )
-from .fft_analyzer import FFTAnalyzer, WelchAnalyzer
 
 __all__ = [
     "BandpassFilter",
-    "SignalProcessor", 
+    "SignalProcessor",
     "FFTAnalyzer",
     "WelchAnalyzer",
     "CHROMMethod",
     "POSMethod",
     "GreenChannelMethod",
-    "SignalQuality"
+    "SignalQuality",
 ]
