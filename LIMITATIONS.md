@@ -25,25 +25,28 @@ This document outlines the current limitations of the rPPG Heart Rate Monitor an
 
 **Recommendation**: Stay still for 10-15 seconds for accurate readings.
 
-### 3. Training Data Limitations
+### 3. Training/Validation Data Limitations
 
-The current model has been validated on:
-- UBFC-rPPG Dataset-1 (limited subjects)
-- UBFC-rPPG Dataset-2 (limited subjects)
+The classical pipeline (CHROM/POS/green/auto) and PhysNet have each been validated
+against **15 real UBFC-rPPG subjects** (all 8 currently-downloaded Dataset-1 subjects
++ 7 Dataset-2 subjects) using honest, uncertainty-bounded, per-subject statistics —
+see the README's [Results](README.md#results) section for the full numbers and
+methodology.
 
 **Not validated on**:
-- Diverse skin tones (limited representation in training data)
+- Diverse skin tones (UBFC-rPPG is a single lab setup with a narrow demographic)
 - Age groups outside dataset demographics
 - People with facial hair, glasses, or makeup
 - Real-world webcam conditions at scale
+- Any camera/webcam other than UBFC's original recording setup
 
 ### 4. Accuracy Variance
 
-| Metric | UBFC Dataset | Real-World Webcam |
-|--------|--------------|-------------------|
-| Mean HR Error | ~1-2 BPM | 5-10 BPM (estimated) |
-| Min/Max Accuracy | ±10-15 BPM | Higher variance |
-| Confidence | 70-90% | 40-70% typically |
+| Metric | UBFC Dataset (measured, N=15) | Real-World Webcam |
+|--------|--------------------------------|--------------------|
+| Classical pipeline (POS/auto) MAE | 1.6 ± 1.0-1.1 BPM | 5-10 BPM (estimated, not yet measured) |
+| PhysNet (LOSO) MAE | 31.4 ± 16.6 BPM (proof-of-concept only, not production) | Not evaluated |
+| Confidence | Calibration verified monotonic (higher confidence -> lower error) | Not yet measured |
 
 ### 5. Hardware Requirements
 
@@ -82,35 +85,39 @@ The current model has been validated on:
 
 ## Future Improvements
 
-### Phase 1: PhysNet Training on Full UBFC Dataset (Next Priority)
+> **Note on numbering**: this is a wishlist of future ideas, not a sequenced
+> execution plan — the numbered "Phase 0-5" production-readiness roadmap (foundation,
+> real validation, test coverage, API hardening, PhysNet/ONNX runtime integration,
+> deploy) is tracked separately and is what's actually being executed against.
 
-Once all subjects from UBFC-rPPG Dataset-2 are downloaded:
+### Scale PhysNet Training Beyond the Current 15 Subjects
 
-1. **Data Preparation**
-   - Load all 42 subjects from UBFC-rPPG Dataset-2
-   - Split into train (80%) and validation (20%) sets
-   - Extract synchronized video frames and ground truth PPG signals
+LOSO (Leave-One-Subject-Out) training and evaluation is now done on all 15 currently-
+downloaded real-ground-truth UBFC-rPPG subjects (8 from Dataset-1 + 7 of Dataset-2's
+42) — see the README's [Results](README.md#results) for the real numbers (mean MAE
+31.4 ± 16.6 BPM). This confirmed the training pipeline works correctly end-to-end but,
+as expected at this scale, does not yet approach the classical pipeline's accuracy.
 
-2. **Model Training**
-   - Train PhysNet 3D-CNN with ground truth PPG supervision
-   - Use negative Pearson correlation loss
-   - Target: < 1 BPM mean absolute error
+Remaining work:
+- Incrementally download more of UBFC-rPPG Dataset-2's remaining 35 subjects and
+  re-run the (already resumable) LOSO sweep as more real ground truth becomes available
+- Export a trained checkpoint to ONNX and wire it into the live runtime (currently
+  the app only ever uses CHROM/POS/green/auto, never PhysNet) — tracked as a later
+  production-readiness phase, not blocked on more data
+- Benchmark inference speed once wired in
 
-3. **Export and Integration**
-   - Export trained model to ONNX format
-   - Replace FFT-based HR extraction with neural network inference
-   - Benchmark inference speed and accuracy
-
-### Phase 2: Signal Processing Improvements
+### Signal Processing Improvements
 
 | Task | Description | Expected Impact |
 |------|-------------|-----------------|
 | Motion Compensation | Detect head movement and filter artifacts | 30% better stability |
 | Adaptive FFT Window | Dynamic window size based on signal quality | More accurate min/max |
-| POS Method Integration | Add Plane-Orthogonal-to-Skin algorithm | Better low-light performance |
 | ICA Decomposition | Separate pulse signal from noise | Cleaner signal extraction |
 
-### Phase 3: Webcam Optimization
+(CHROM, POS, green-channel, and confidence-based auto-selection are already
+implemented and evaluated — see [Results](README.md#results).)
+
+### Webcam Optimization
 
 - [ ] Optimize frame preprocessing pipeline
 - [ ] Add automatic lighting quality detection
@@ -118,16 +125,16 @@ Once all subjects from UBFC-rPPG Dataset-2 are downloaded:
 - [ ] Create "calibration" mode for initial face detection
 - [ ] Add audio/visual feedback for poor signal quality
 
-### Phase 4: Validation on Diverse Datasets
+### Validation on Diverse Datasets
 
 | Dataset | Purpose | Status |
 |---------|---------|--------|
-| UBFC-rPPG Dataset-2 (Full) | Primary training | Pending download |
+| UBFC-rPPG Dataset-2 (Full, 42 subjects) | Primary training/validation | 7/42 downloaded |
 | PURE | Skin tone diversity | Planned |
 | MMSE-HR | Expression variation | Planned |
 | VIPL-HR | Large-scale validation | Research |
 
-### Phase 5: Production Features
+### Production Features
 
 - [ ] Add session recording and playback
 - [ ] Implement heart rate variability (HRV) analysis
@@ -143,7 +150,7 @@ Once all subjects from UBFC-rPPG Dataset-2 are downloaded:
 4. **Stress Detection** - Combine HRV with facial expressions for stress assessment
 5. **Multi-Person Detection** - Track heart rate of multiple people simultaneously
 
-### Phase 6: ONNX and TensorRT Optimization (Learning Priority)
+### ONNX and TensorRT Optimization (Learning Priority)
 
 #### ONNX (Open Neural Network Exchange)
 - [ ] Learn ONNX export from PyTorch models
@@ -178,12 +185,16 @@ Once all subjects from UBFC-rPPG Dataset-2 are downloaded:
 
 ## Validation Status
 
-| Dataset | Subjects Tested | Mean Accuracy | Status |
-|---------|-----------------|---------------|--------|
-| UBFC-rPPG Dataset-1 | 1 | ~1 BPM error | Validated |
-| UBFC-rPPG Dataset-2 | 1 | ~1-2 BPM error | Validated |
-| Real-world Webcam | Limited | Variable | In Progress |
-| Diverse Populations | 0 | N/A | Not Tested |
+| Dataset | Subjects Tested | Classical Pipeline (POS/auto) | PhysNet (LOSO) | Status |
+|---------|-----------------|-------------------------------|-----------------|--------|
+| UBFC-rPPG Dataset-1 | 8 (all downloaded) | Included in the 15-subject evaluation below | Included in the 15-subject LOSO below | Validated |
+| UBFC-rPPG Dataset-2 | 7 (of 42; more can be added incrementally) | 1.57 ± 1.02-1.07 BPM MAE (N=15 combined) | 31.4 ± 16.6 BPM MAE (N=15 folds, proof-of-concept) | Validated |
+| Real-world Webcam | 0 | Not yet measured | Not applicable | Not Tested |
+| Diverse Populations | 0 | Not yet measured | Not applicable | Not Tested |
+
+Full methodology (two-tier per-subject/per-window statistics, bootstrap confidence
+intervals, Bland-Altman agreement, confidence calibration, Kalman-smoothing
+diagnostic) is in the README's [Results](README.md#results) section.
 
 ---
 

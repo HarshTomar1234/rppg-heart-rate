@@ -44,6 +44,10 @@ docs/
 specs/
 phases/
 
+# Generated evaluation/training artifacts (plots, CSVs, checkpoints) — reproducible
+# from scripts/, not committed
+results/
+
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints

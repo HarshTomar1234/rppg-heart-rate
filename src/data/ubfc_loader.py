@@ -3,12 +3,12 @@ UBFC-rPPG Dataset Loader
 Loads and processes UBFC-rPPG dataset for training PhysNet
 """
 
+from dataclasses import dataclass
+from pathlib import Path
+
+import cv2
 import numpy as np
 import pandas as pd
-import cv2
-from pathlib import Path
-from typing import List, Optional, Dict
-from dataclasses import dataclass
 
 from ..logging_config import get_logger
 
@@ -21,9 +21,9 @@ class UBFCSubject:
 
     subject_id: str
     video_path: str
-    gt_ppg: Optional[np.ndarray]  # Ground truth PPG signal
-    gt_hr: Optional[np.ndarray]  # Ground truth heart rate
-    gt_time: Optional[np.ndarray]  # Time stamps
+    gt_ppg: np.ndarray | None  # Ground truth PPG signal
+    gt_hr: np.ndarray | None  # Ground truth heart rate
+    gt_time: np.ndarray | None  # Time stamps
     fps: float
     total_frames: int
     has_ground_truth: bool
@@ -44,7 +44,7 @@ class UBFCDatasetLoader:
             dataset_root: Path to datasets folder containing DATASET_1, DATASET_2
         """
         self.dataset_root = Path(dataset_root)
-        self.subjects: List[UBFCSubject] = []
+        self.subjects: list[UBFCSubject] = []
         self._scan_datasets()
 
     def _scan_datasets(self):
@@ -176,15 +176,15 @@ class UBFCDatasetLoader:
                 status = "[OK]" if has_video and has_gt else "[WARN]"
                 logger.info("%s %s: video=%s, gt=%s", status, folder.name, has_video, has_gt)
 
-    def get_trainable_subjects(self) -> List[UBFCSubject]:
+    def get_trainable_subjects(self) -> list[UBFCSubject]:
         """Get subjects that have both video and ground truth."""
         return [s for s in self.subjects if s.video_path and s.has_ground_truth]
 
-    def get_video_only_subjects(self) -> List[UBFCSubject]:
+    def get_video_only_subjects(self) -> list[UBFCSubject]:
         """Get subjects with video but no ground truth (for pseudo-labeling)."""
         return [s for s in self.subjects if s.video_path and not s.has_ground_truth]
 
-    def summary(self) -> Dict:
+    def summary(self) -> dict:
         """Get dataset summary."""
         trainable = self.get_trainable_subjects()
         video_only = self.get_video_only_subjects()
@@ -226,6 +226,66 @@ def resample_gt_to_frames(
         resampled = resampled / std
 
     return resampled
+
+
+def compute_windowed_gt_hr(
+    gt_signal: np.ndarray,
+    gt_time: np.ndarray,
+    num_frames: int,
+    fps: float,
+    window_frames: int = 180,
+    stride_frames: int = 30,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute ground-truth BPM per sliding window, using the SAME windowed-FFT
+    procedure the production pipeline applies to its own extracted pulse signal.
+
+    This keeps the comparison symmetric: rather than trusting the pulse oximeter's
+    built-in HR channel (which has its own, unknown, internal smoothing), the raw PPG
+    waveform is resampled to the video's frame grid and then windowed/bandpassed/FFT'd
+    exactly like ``SignalProcessor.get_pulse_signal()`` + ``FFTAnalyzer`` does for the
+    camera-derived signal. Any remaining discrepancy is then attributable to the rPPG
+    extraction itself, not to a windowing or smoothing mismatch between the two sides.
+
+    Only full windows are emitted (the first output is anchored at frame index
+    ``window_frames - 1``), matching a strict 6-second buffer rather than the live
+    monitor's shorter early-warmup estimates — this keeps evaluation windows uniform.
+
+    Args:
+        gt_signal: Raw ground-truth PPG waveform.
+        gt_time: Ground-truth sample timestamps, in seconds.
+        num_frames: Number of video frames.
+        fps: Video frame rate.
+        window_frames: Window size in frames (default 180 = 6s at 30fps, matching
+            ``HeartRateMonitor``'s default buffer).
+        stride_frames: Step between windows in frames (default 30 = 1s at 30fps).
+
+    Returns:
+        Tuple of (frame_indices, gt_bpm) — frame_indices are the last frame index of
+        each window (aligned to when a live estimate at that frame would be available).
+    """
+    # Local imports: avoids a module-level src.data -> src.processing import cycle risk
+    # and keeps this dataset-analysis helper's dependency footprint explicit.
+    from ..processing.fft_analyzer import FFTAnalyzer
+    from ..processing.filters import BandpassFilter, detrend_signal
+
+    frame_aligned = resample_gt_to_frames(gt_signal, gt_time, num_frames, fps)
+    bandpass = BandpassFilter(fps=fps)
+    fft_analyzer = FFTAnalyzer(fps=fps)
+
+    frame_indices = []
+    gt_bpm = []
+    for end in range(window_frames - 1, num_frames, stride_frames):
+        start = end - window_frames + 1
+        window = frame_aligned[start : end + 1]
+
+        pulse = detrend_signal(window)
+        pulse = bandpass.filter(pulse)
+        bpm, _confidence = fft_analyzer.get_heart_rate(pulse)
+
+        frame_indices.append(end)
+        gt_bpm.append(bpm)
+
+    return np.array(frame_indices), np.array(gt_bpm)
 
 
 if __name__ == "__main__":
