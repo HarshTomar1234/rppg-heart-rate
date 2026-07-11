@@ -42,10 +42,10 @@ class HeartRateMonitor:
             buffer_seconds: Seconds of data to buffer
             roi_region: Face region to use (forehead, left_cheek, right_cheek)
             smoothing_window: Number of readings to smooth over
-            method: Signal extraction method ('chrom', 'pos', 'auto')
+            method: Signal extraction method ('chrom', 'pos', 'green', 'auto')
             enable_low_light: Enable low-light frame enhancement
         """
-        valid_methods = ("chrom", "pos", "auto")
+        valid_methods = ("chrom", "pos", "green", "auto")
         if method not in valid_methods:
             raise ValueError(f"method must be one of {valid_methods}, got {method!r}")
 
@@ -60,7 +60,7 @@ class HeartRateMonitor:
 
         # Signal processing.
         # For 'auto' the base method is a fallback only (get_best_signal tries all);
-        # for 'chrom'/'pos' the processor must actually use the requested method.
+        # for 'chrom'/'pos'/'green' the processor must actually use the requested method.
         self.signal_processor = SignalProcessor(
             buffer_size=self.buffer_size,
             fps=fps,
@@ -176,6 +176,7 @@ class HeartRateMonitor:
             status,
             raw_signal=signal,
             method=method_used,
+            raw_heart_rate=heart_rate,
         )
 
     def _smooth_heart_rate(self, hr: float, confidence: float) -> float:
@@ -234,6 +235,7 @@ class HeartRateMonitor:
         status: str,
         raw_signal: np.ndarray = None,
         method: str = None,
+        raw_heart_rate: float = None,
     ) -> dict[str, Any]:
         """Create result dictionary with annotated frame."""
 
@@ -271,6 +273,11 @@ class HeartRateMonitor:
             result["raw_signal"] = raw_signal
         if method is not None:
             result["method"] = method
+        if raw_heart_rate is not None:
+            # Pre-Kalman FFT-derived BPM, exposed for evaluation/diagnostics —
+            # lets callers compare raw signal-processing accuracy against the
+            # smoothed value actually shown to users.
+            result["raw_heart_rate"] = raw_heart_rate
 
         return result
 

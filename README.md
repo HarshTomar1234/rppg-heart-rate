@@ -188,17 +188,28 @@ while cap.isOpened():
 ```
 Input Video --> Face Detection --> ROI Extraction --> Signal Processing --> FFT --> Heart Rate
      |              |                   |                    |               |          |
-  Frames      Haar Cascade        Forehead ROI         CHROM/POS/PhysNet   Peak      BPM
+  Frames    MediaPipe Face Mesh   Forehead+Cheeks       CHROM/POS/green    Peak      BPM
 ```
 
 ### Processing Pipeline
 
-1. **Face Detection**: Haar Cascade classifier localizes facial region
-2. **ROI Extraction**: Forehead region selected for optimal pulse visibility
-3. **Signal Extraction**: RGB temporal traces converted to pulse signal
+1. **Face Detection**: MediaPipe Face Mesh (478 landmarks) localizes the face and
+   forehead/cheek regions; a legacy Haar Cascade detector also exists in
+   `src/detection/face_detector.py` but is not used by the live pipeline
+2. **ROI Extraction**: Multi-region (forehead + both cheeks) fusion for a more
+   robust signal with redundancy
+3. **Signal Extraction**: RGB temporal traces converted to a pulse signal via CHROM,
+   POS, green-channel, or confidence-based auto-selection between them (see
+   [Results](#results) for measured accuracy of each)
 4. **Bandpass Filtering**: 0.7-3.0 Hz filter isolates cardiac frequencies (42-180 BPM)
 5. **Spectral Analysis**: FFT identifies dominant frequency component
-6. **Heart Rate Estimation**: Peak frequency converted to BPM with confidence scoring
+6. **Heart Rate Estimation**: Peak frequency converted to BPM, then Kalman-smoothed
+   with confidence scoring
+
+PhysNet (a 3D-CNN, `src/models/physnet.py`) is trained and evaluated (see
+[Results](#results)) but is **not yet wired into this live pipeline** — the app
+always uses CHROM/POS/green/auto. Integrating a trained checkpoint into the runtime
+is tracked as later production-readiness work.
 
 ## Algorithms
 
@@ -239,22 +250,38 @@ Reference: Yu, Z., et al. (2019). Remote heart rate measurement from highly comp
 
 ## Training
 
-### Train on UBFC-rPPG Dataset
+### Evaluate the classical pipeline (no training required)
+
+CHROM/POS/green/auto are deterministic signal processing — nothing to train. This
+runs the exact production pipeline against real UBFC-rPPG ground truth and reports
+honest, uncertainty-bounded accuracy:
 
 ```bash
-python scripts/train_ubfc.py --dataset datasets --epochs 30 --batch-size 4
+python scripts/evaluate_classical.py --dataset datasets --output results/phase1
 ```
 
-Options:
-- `--dataset`: Path to UBFC-rPPG dataset directory
-- `--epochs`: Number of training epochs
-- `--batch-size`: Batch size for training
-- `--lr`: Learning rate (default: 1e-4)
+### Train PhysNet with Leave-One-Subject-Out cross-validation
 
-### Training Output
+```bash
+python scripts/train_ubfc.py --dataset datasets --output results/phase1/physnet_loso
+python scripts/train_ubfc.py --smoke-test   # 1 fold, 2 epochs, fast sanity check
+```
 
-- `models/physnet_ubfc.pth`: PyTorch model weights
-- `models/physnet_ubfc.onnx`: ONNX exported model
+Every trainable subject is held out exactly once, trained on all others, and never
+appears in its own training set — this replaced an earlier version that split at the
+*clip* level, which let overlapping clips from the same subject leak across the
+train/val boundary and inflate validation accuracy. See
+[Results](#results) below for why this matters and what it changed.
+
+Options: `--epochs`, `--batch-size`, `--lr`, `--grad-accum-steps`, `--weight-decay`,
+`--early-stop-patience`, `--held-out <subject_ids>` (run a subset of folds). The run
+is resumable: re-running the same command skips folds already recorded in
+`loso_summary.json`.
+
+### Training output
+
+- `results/<output>/checkpoints/physnet_loso_<subject_id>.pth` — one checkpoint per fold
+- `results/<output>/loso_summary.json` — per-fold MAE/RMSE/Pearson r + aggregate stats
 
 ## Results
 
@@ -269,30 +296,75 @@ Options:
 #### Session Report Chart
 ![Heart Rate Chart](result_imgs/user_chart.png)
 
-### Accuracy Metrics
+### Methodology
 
-| Dataset | Ground Truth Mean | System Mean | Error | Confidence |
-|---------|------------------|-------------|-------|------------|
-| UBFC Dataset-1 Subject 11 | 77.7 BPM | 78.0 BPM | **0.3 BPM** | 54% |
-| UBFC Dataset-2 Subject 1 | 106.7 BPM | 105.3 BPM | **1.4 BPM** | 91% |
+Evaluated against **15 real UBFC-rPPG subjects** (all 8 from Dataset-1, 7 from
+Dataset-2) — every subject with both a video and real ground-truth PPG currently
+downloaded. Ground truth is computed by applying the *same* 6-second windowed-FFT
+procedure to the raw PPG waveform that's applied to the extracted rPPG signal, so
+both sides of the comparison are methodologically symmetric (not compared against the
+pulse oximeter's own precomputed HR channel, which has unknown internal smoothing).
 
-### Training Performance
+Two tiers of metrics are reported and never blended: **per-subject** (N=15 — the only
+tier that supports an inferential claim, e.g. a confidence interval) and **per-window**
+(965 pooled 6s windows — descriptive only, since windows within a subject overlap 5 of
+every 6 seconds and share subject-level confounds like skin tone and lighting).
+
+Full methodology, statistical reasoning, and reviewed-by-an-ML-specialist design
+decisions are in `specs/phase-1.md` (local working notes, not tracked in this repo).
+
+### Classical pipeline (CHROM / POS / green / auto) — no training required
+
+| Method | Per-subject MAE (N=15) | 95% CI (bootstrap) | Bland-Altman bias / SD | % windows within ±5 BPM |
+|---|---|---|---|---|
+| CHROM | 1.77 ± 1.17 BPM | [1.25, 2.38] | -0.21 / 4.32 | 95.9% |
+| **POS** | **1.57 ± 1.07 BPM** | [1.09, 2.14] | -0.17 / 4.07 | 96.2% |
+| Green channel (naive floor) | 4.74 ± 2.85 BPM | [3.39, 6.17] | +0.50 / 9.50 | 78.8% |
+| **Auto (POS/CHROM/green, confidence-selected)** | **1.57 ± 1.02 BPM** | [1.11, 2.09] | -0.21 / 3.92 | 96.5% |
+
+- **CHROM vs POS**: paired Wilcoxon signed-rank test (N=15) gives p=0.09 — **not
+  statistically distinguishable at this sample size** (not claimed as "equivalent").
+- **Auto-mode method selection**: POS chosen 57% of windows, CHROM 39%, green 4% — no
+  method is ever silently unused.
+- **Confidence calibration**: verified monotonic — mean error drops from ~8.4 BPM in
+  the lowest confidence decile to ~1.0 BPM in the highest, confirming the app's
+  confidence score is a real quality signal, not decoration.
+- **Kalman-smoothing check**: smoothed-vs-ground-truth variance ratio is ~1.1-1.2x
+  (not <1), meaning the Kalman filter is *not* artificially flattering accuracy by
+  suppressing genuine heart-rate variability — a specific failure mode we checked for
+  and did not find.
+
+### PhysNet (3D-CNN, Leave-One-Subject-Out cross-validation)
 
 | Metric | Value |
-|--------|-------|
-| Training Subjects | 15 |
-| Training Clips | 953 |
-| Final Training Loss | 0.41 |
-| Final Validation Loss | 0.58 |
-| Loss Improvement | 42% |
+|---|---|
+| Subjects (folds) | 15 |
+| Mean MAE | 31.4 ± 16.6 BPM |
+| 95% CI (bootstrap) | [24.2, 40.8] |
+| Median MAE | 27.7 BPM |
+| Range | 15.4 – 84.0 BPM |
 
-### Performance Characteristics
-- Mean HR accuracy: **< 2 BPM error** on controlled datasets
-- Real-time processing capable (~12 FPS with ONNX)
-- Confidence-based quality assessment
-- Best results with good lighting conditions
+**Honest framing**: this is substantially worse than the classical pipeline above,
+and that is an expected, not a surprising, result. A 3D-CNN trained from scratch on
+only 14 subjects per fold does not have enough data diversity to learn a
+generalizable pulse signal — published PhysNet-class results typically pretrain on
+much larger multi-dataset corpora before fine-tuning. This training run demonstrates
+that the *pipeline* works correctly end-to-end (subject-level LOSO splitting with no
+leakage, NegPearson-loss training, checkpointing, clip-stitching inference, and
+windowed-FFT extraction) — it is **not** presented as a production-ready model, and
+CHROM/POS/auto remain what the live app actually uses.
 
-> **Note**: See [LIMITATIONS.md](LIMITATIONS.md) for detailed accuracy limitations and future improvements.
+### What this validation does NOT show
+
+- No cross-skin-tone or cross-lighting generalization claim — UBFC-rPPG is a single
+  lab setup with a narrow demographic.
+- No clinical or diagnostic validity claim — ground truth is consumer pulse-oximeter
+  PPG, not ECG.
+- No claim of robustness to other cameras, webcams, or video compression.
+- No claim of motion robustness beyond UBFC-2's mild task protocol.
+- No comparison to published SOTA benchmark tables (different N and protocol).
+
+> **Note**: See [LIMITATIONS.md](LIMITATIONS.md) for the full limitations list.
 
 
 ## Project Structure
