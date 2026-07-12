@@ -109,13 +109,35 @@ This project explores how computer vision and deep learning can democratize heal
 
 ## Installation
 
-### Prerequisites
+### Option A: Docker (recommended for just trying the dashboard)
 
+No Python/CUDA/MediaPipe setup required — only Docker.
+
+```bash
+git clone https://github.com/HarshTomar1234/rppg-heart-rate.git
+cd rppg-heart-rate
+docker compose up --build
+```
+
+Navigate to `http://localhost:8000`. Override any setting via a `.env` file next to
+`docker-compose.yml` (e.g. `RPPG_CORS_ORIGINS=...`) or `-e` flags with plain
+`docker run`. **Image size note**: this bundles MediaPipe, OpenCV, PyTorch (CPU
+build), ONNX Runtime, and more — expect a multi-GB image and a build that takes a
+few minutes on first run (subsequent builds are fast, cached). There is no live
+public deployment of this project; Docker is the supported way to run it yourself.
+
+The container only serves the live classical (CHROM/POS/green/auto) dashboard —
+PhysNet training/evaluation tooling (`scripts/`) isn't included in the image, since
+it isn't part of what the running app serves. Use Option B below for that.
+
+### Option B: Local Python environment (for training/evaluation scripts too)
+
+**Prerequisites**
 - Python 3.10 or higher
-- CUDA 11.8+ (optional, for GPU acceleration)
+- CUDA 12.1 (optional, for GPU-accelerated PhysNet training — see below)
 - Git
 
-### Setup
+**Setup**
 
 ```bash
 # Clone the repository
@@ -131,22 +153,25 @@ source venv/bin/activate     # Linux/macOS
 pip install -r requirements.txt
 ```
 
-### GPU Support (Optional)
+**GPU Support (Optional, for PhysNet training)**
 
-For CUDA-accelerated training and inference:
+`requirements.txt` installs the default (CPU) PyTorch build. For CUDA-accelerated
+training (validated working with an NVIDIA GTX 1050 Ti during Phase 1's real LOSO
+training run):
 
 ```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+pip install --force-reinstall --no-deps torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ## Usage
 
 ### Web Dashboard
 
-Launch the real-time monitoring dashboard:
+Launch the real-time monitoring dashboard (respects `RPPG_HOST`/`RPPG_PORT`/
+`RPPG_CORS_ORIGINS` env vars, defaulting to `127.0.0.1:8000`):
 
 ```bash
-python -m uvicorn src.app.main:app --host 127.0.0.1 --port 8000
+python -m src.app.main
 ```
 
 Navigate to `http://localhost:8000` in your browser, then upload a video file for analysis.
@@ -372,26 +397,33 @@ CHROM/POS/auto remain what the live app actually uses.
 ```
 rppg-heart-rate/
 ├── src/
-│   ├── detection/          # Face detection and ROI extraction
+│   ├── detection/          # Face detection and ROI extraction (MediaPipe)
+│   │   ├── mediapipe_detector.py
 │   │   ├── face_detector.py
 │   │   └── roi_extractor.py
 │   ├── processing/         # Signal processing algorithms
-│   │   ├── filters.py      # CHROM, POS, bandpass filtering
-│   │   └── fft_analyzer.py # Spectral analysis
+│   │   ├── filters.py      # CHROM, POS, green-channel, bandpass filtering
+│   │   ├── fft_analyzer.py # Spectral analysis
+│   │   ├── kalman_filter.py
+│   │   └── low_light.py
 │   ├── vitals/             # Heart rate estimation pipeline
 │   │   └── heart_rate.py
-│   ├── models/             # Deep learning architectures
-│   │   └── physnet.py      # PhysNet 3D-CNN
-│   ├── data/               # Dataset loaders
+│   ├── models/              # Deep learning architectures
+│   │   └── physnet.py       # PhysNet 3D-CNN (trained/evaluated, not yet wired into the live app)
+│   ├── data/                # Dataset loaders
 │   │   └── ubfc_loader.py
-│   └── app/                # Web application
-│       ├── main.py         # FastAPI backend
-│       └── static/         # Frontend assets
-├── scripts/
-│   ├── train_ubfc.py       # Training script
-│   └── test_physnet.py     # Testing and evaluation
-├── models/                 # Trained model weights
+│   └── app/                 # Web application (the live dashboard)
+│       ├── main.py          # FastAPI backend
+│       └── static/          # Frontend assets
+├── scripts/                 # Training/evaluation tooling (not part of the live app)
+│   ├── evaluate_classical.py  # Honest multi-subject accuracy evaluation
+│   └── train_ubfc.py          # LOSO PhysNet training
+├── tests/                   # pytest suite
+├── models/                  # MediaPipe model weights (committed) + local PhysNet checkpoints
+├── Dockerfile                # Runtime image for the live dashboard (Docker packaging only, no live deploy)
+├── docker-compose.yml
 ├── requirements.txt
+├── pyproject.toml
 ├── demo_video.py
 ├── LICENSE
 └── README.md

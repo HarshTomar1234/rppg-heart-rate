@@ -1,0 +1,53 @@
+# Version control / CI
+.git/
+.github/
+
+# Internal planning notes (local-only, not part of the image)
+specs/
+phases/
+
+# Large local-only data (never needed by the live app)
+datasets/
+results/
+data/videos/
+src/app/uploads/
+
+# Dev/training tooling not needed to serve the dashboard
+tests/
+scripts/
+notebooks/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Docker itself
+Dockerfile
+docker-compose.yml
+.dockerignore
