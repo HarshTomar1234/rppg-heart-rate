@@ -565,6 +565,7 @@
         const statusText = document.getElementById('statusText');
 
         let ws = null;
+        let wsWebcam = null;
         let hrData = [];
         let chart = null;
         let resultsData = null;
@@ -643,6 +644,14 @@
 
                 updateStatus('Camera active', 'processing');
 
+                // Each webcam session gets its own WebSocket connection, and with
+                // it its own server-side HeartRateMonitor -- connection lifetime is
+                // session lifetime, so closing this socket (in stopWebcam/resetApp)
+                // is the reset; no separate reset call needed.
+                wsWebcam = new WebSocket(`ws://${window.location.host}/ws/webcam`);
+                wsWebcam.onmessage = handleWebcamMessage;
+                wsWebcam.onerror = (error) => console.error('Webcam WebSocket error:', error);
+
                 // Process at 10 FPS to reduce load
                 frameInterval = setInterval(processWebcamFrame, 100);
 
@@ -652,8 +661,8 @@
             }
         }
 
-        async function processWebcamFrame() {
-            if (!isWebcamMode) return;
+        function processWebcamFrame() {
+            if (!isWebcamMode || !wsWebcam || wsWebcam.readyState !== WebSocket.OPEN) return;
 
             const canvas = document.createElement('canvas');
             canvas.width = 640;
@@ -662,64 +671,72 @@
             ctx.drawImage(webcamVideo, 0, 0);
             const imageData = canvas.toDataURL('image/jpeg', 0.7);
 
-            try {
-                const response = await fetch('/process_frame', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ frame: imageData.split(',')[1] })
-                });
+            wsWebcam.send(JSON.stringify({ frame: imageData.split(',')[1] }));
+        }
 
-                const data = await response.json();
+        function handleWebcamMessage(event) {
+            const data = JSON.parse(event.data);
 
-                if (data.heart_rate && isWebcamMode) {
-                    const hr = parseFloat(data.heart_rate);
-                    const conf = parseFloat(data.confidence) || 0;
+            if (data.error) {
+                // Transient per-frame errors (e.g. a corrupt JPEG from the canvas) --
+                // the next frame 100ms later will likely succeed, so just surface it
+                // rather than silently freezing the last good reading.
+                console.warn('Webcam frame error:', data.error);
+                return;
+            }
 
-                    // Confidence gate: Hide readings when confidence < 50% (lowered for webcam)
-                    const CONFIDENCE_GATE = 0.5;
-                    const showReading = conf >= CONFIDENCE_GATE && hr > 40 && hr < 180;
+            // `heart_rate` is a legitimate 0 when no pulse/face is detected -- checking
+            // for its presence (not truthiness) so a real 0 reading isn't treated the
+            // same as "no message received yet".
+            if (typeof data.heart_rate === 'number' && isWebcamMode) {
+                const hr = data.heart_rate;
+                const conf = parseFloat(data.confidence) || 0;
 
-                    document.getElementById('currentHR').textContent = showReading ? Math.round(hr) : '--';
-                    document.getElementById('avgHRLive').textContent = Math.round(data.avg_heart_rate) || '--';
-                    document.getElementById('confidence').textContent = Math.round(conf * 100);
-                    document.getElementById('confidenceFill').style.width = (conf * 100) + '%';
+                // Confidence gate: Hide readings when confidence < 50% (lowered for webcam)
+                const CONFIDENCE_GATE = 0.5;
+                const showReading = conf >= CONFIDENCE_GATE && hr > 40 && hr < 180;
 
-                    // Add low signal indicator
-                    const confBar = document.getElementById('confidenceFill');
-                    if (conf < CONFIDENCE_GATE) {
-                        confBar.style.background = '#fbbf24'; // Yellow for low signal
-                    } else {
-                        confBar.style.background = '#10b981'; // Green for good signal
-                    }
+                document.getElementById('currentHR').textContent = showReading ? Math.round(hr) : '--';
+                // avg_heart_rate is only ever exactly 0 when no valid (>0 BPM) sample
+                // has been recorded yet -- server only accumulates hr>0 readings -- so
+                // '--' here means "no data yet", not "a real zero average".
+                document.getElementById('avgHRLive').textContent = Math.round(data.avg_heart_rate) || '--';
+                document.getElementById('confidence').textContent = Math.round(conf * 100);
+                document.getElementById('confidenceFill').style.width = (conf * 100) + '%';
 
-                    // Only add to chart if good reading
-                    if (showReading) {
-                        hrData.push(hr);
-                        if (hrData.length > 60) hrData.shift();
-                        chart.data.labels = hrData.map((_, i) => i);
-                        chart.data.datasets[0].data = hrData;
-                        chart.update('none');
-                    }
-
-
-                    // Update results
-                    if (hrData.length > 0) {
-                        resultsData = {
-                            avg: Math.round(hrData.reduce((a, b) => a + b, 0) / hrData.length),
-                            min: Math.round(Math.min(...hrData)),
-                            max: Math.round(Math.max(...hrData)),
-                            samples: hrData.length,
-                            hrData: [...hrData]
-                        };
-                        document.getElementById('avgHR').textContent = resultsData.avg;
-                        document.getElementById('minHR').textContent = resultsData.min;
-                        document.getElementById('maxHR').textContent = resultsData.max;
-                        document.getElementById('samples').textContent = resultsData.samples;
-                        resultsSection.classList.add('active');
-                    }
+                // Add low signal indicator
+                const confBar = document.getElementById('confidenceFill');
+                if (conf < CONFIDENCE_GATE) {
+                    confBar.style.background = '#fbbf24'; // Yellow for low signal
+                } else {
+                    confBar.style.background = '#10b981'; // Green for good signal
                 }
-            } catch (error) {
-                // Silently ignore frame errors
+
+                // Only add to chart if good reading
+                if (showReading) {
+                    hrData.push(hr);
+                    if (hrData.length > 60) hrData.shift();
+                    chart.data.labels = hrData.map((_, i) => i);
+                    chart.data.datasets[0].data = hrData;
+                    chart.update('none');
+                }
+
+
+                // Update results
+                if (hrData.length > 0) {
+                    resultsData = {
+                        avg: Math.round(hrData.reduce((a, b) => a + b, 0) / hrData.length),
+                        min: Math.round(Math.min(...hrData)),
+                        max: Math.round(Math.max(...hrData)),
+                        samples: hrData.length,
+                        hrData: [...hrData]
+                    };
+                    document.getElementById('avgHR').textContent = resultsData.avg;
+                    document.getElementById('minHR').textContent = resultsData.min;
+                    document.getElementById('maxHR').textContent = resultsData.max;
+                    document.getElementById('samples').textContent = resultsData.samples;
+                    resultsSection.classList.add('active');
+                }
             }
         }
 
@@ -737,8 +754,10 @@
             stopBtn.style.display = 'none';
             updateStatus('Session ended', 'complete');
 
-            // Reset server state
-            fetch('/reset_webcam', { method: 'POST' });
+            if (wsWebcam) {
+                wsWebcam.close();
+                wsWebcam = null;
+            }
         }
 
         async function uploadVideo(file) {
@@ -754,11 +773,12 @@
                     body: formData
                 });
 
-                const data = await response.json();
-                if (data.error) {
-                    updateStatus('Upload error', 'error');
+                if (!response.ok) {
+                    const errorBody = await response.json().catch(() => ({}));
+                    updateStatus(errorBody.detail || 'Upload error', 'error');
                     return;
                 }
+                const data = await response.json();
                 processVideo(data.path);
             } catch (error) {
                 updateStatus('Upload failed', 'error');
@@ -841,6 +861,10 @@
         function resetApp() {
             // Stop everything
             if (ws) ws.close();
+            if (wsWebcam) {
+                wsWebcam.close();
+                wsWebcam = null;
+            }
             if (frameInterval) clearInterval(frameInterval);
             if (webcamStream) {
                 webcamStream.getTracks().forEach(track => track.stop());
@@ -878,9 +902,6 @@
             }
             resultsData = null;
             updateStatus('Ready', 'idle');
-
-            // Reset server
-            fetch('/reset_webcam', { method: 'POST' });
         }
 
         function downloadJSON() {

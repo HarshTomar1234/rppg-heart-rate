@@ -25,6 +25,7 @@ dev = [
     "ruff==0.8.4",
     "black==24.10.0",
     "pre-commit==3.8.0",
+    "httpx==0.28.1",
 ]
 
 [project.urls]
@@ -63,6 +64,7 @@ ignore = ["E501", "B008"]
 "scripts/*.py" = ["E402"]
 "tests/test_method_wiring.py" = ["E402"]
 "tests/test_ubfc_loader.py" = ["E402"]
+"tests/test_app_hardening.py" = ["E402"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

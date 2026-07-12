@@ -23,6 +23,10 @@ onnxruntime==1.19.2
 # --- Web app ---
 fastapi==0.115.6
 uvicorn==0.32.1
+# uvicorn's base install has NO WebSocket protocol support on its own (confirmed via
+# real-server testing during Phase 3: /ws/process and /ws/webcam both 404 without
+# this). Required, not optional, for the app's core video/webcam processing.
+websockets==15.0.1
 python-multipart==0.0.20
 jinja2==3.1.4
 
