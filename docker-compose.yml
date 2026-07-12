@@ -1,0 +1,9 @@
+services:
+  rppg:
+    build: .
+    ports:
+      - "${RPPG_PORT:-8000}:8000"
+    environment:
+      # Override any of these via a .env file next to this compose file, or
+      # `RPPG_CORS_ORIGINS=... docker compose up`, without editing the Dockerfile.
+      - RPPG_CORS_ORIGINS=${RPPG_CORS_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}
