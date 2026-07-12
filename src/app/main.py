@@ -5,16 +5,26 @@ WebSocket-based real-time heart rate monitoring
 
 import asyncio
 import base64
-import tempfile
+import math
+import os
 import time
+import uuid
 from pathlib import Path
 
 import cv2
 import matplotlib
 import numpy as np
-from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 matplotlib.use("Agg")  # Non-interactive backend
@@ -38,10 +48,21 @@ app = FastAPI(
 )
 
 # CORS
+# No cookie/session-based auth exists anywhere in this app, so allow_credentials
+# is intentionally omitted (Starlette defaults to False) -- combining a wildcard
+# origin with credentials is a classic footgun that becomes exploitable the moment
+# someone "fixes" allow_origins into a reflected-origin pattern later. Origins
+# default to localhost only; any non-local deployment must set RPPG_CORS_ORIGINS
+# explicitly rather than falling back to a wildcard.
+_default_cors_origins = "http://localhost:8000,http://127.0.0.1:8000"
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv("RPPG_CORS_ORIGINS", _default_cors_origins).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -51,9 +72,35 @@ static_path = Path(__file__).parent / "static"
 static_path.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
+# Uploaded videos live in their own directory, deliberately NOT under static_path --
+# that tree is served publicly via the /static mount above, so anything placed
+# there becomes directly downloadable by anyone.
+UPLOAD_DIR = Path(os.getenv("RPPG_UPLOAD_DIR", str(Path(__file__).parent / "uploads")))
+UPLOAD_DIR.mkdir(exist_ok=True)
 
-# Global heart rate monitor
-monitor: HeartRateMonitor | None = None
+MAX_UPLOAD_BYTES = int(os.getenv("RPPG_MAX_UPLOAD_BYTES", str(200 * 1024 * 1024)))  # 200MB default
+ALLOWED_UPLOAD_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm"}
+ALLOWED_UPLOAD_CONTENT_TYPES = {
+    "video/mp4",
+    "video/quicktime",
+    "video/x-msvideo",
+    "video/webm",
+}
+UPLOAD_MAX_AGE_SECONDS = int(
+    os.getenv("RPPG_UPLOAD_MAX_AGE_SECONDS", str(24 * 60 * 60))
+)  # 24h default
+
+
+def _sweep_stale_uploads() -> None:
+    """Opportunistic cleanup of old uploads -- runs on each /upload call rather than
+    via a separate scheduler, which is unnecessary infrastructure at this app's scale."""
+    now = time.time()
+    for f in UPLOAD_DIR.iterdir():
+        try:
+            if f.is_file() and (now - f.stat().st_mtime) > UPLOAD_MAX_AGE_SECONDS:
+                f.unlink()
+        except OSError:
+            pass  # best-effort; another request may have already removed it
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -78,17 +125,55 @@ async def home():
 @app.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
     """Upload a video for processing."""
-    # Save to temp file
-    temp_path = Path(tempfile.gettempdir()) / f"rppg_{file.filename}"
+    _sweep_stale_uploads()
 
-    with open(temp_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+    # The client-supplied filename (from the Content-Disposition header) is never
+    # used for the storage path -- only its extension is inspected, and a fresh
+    # server-generated name is what actually touches the filesystem. This is what
+    # neutralizes filename-based path traversal, not string sanitization of the
+    # original name.
+    original_name = file.filename or ""
+    extension = Path(original_name).suffix.lower()
+    if (
+        extension not in ALLOWED_UPLOAD_EXTENSIONS
+        or file.content_type not in ALLOWED_UPLOAD_CONTENT_TYPES
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type. Allowed: {sorted(ALLOWED_UPLOAD_EXTENSIONS)}",
+        )
+
+    stored_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{extension}"
+
+    bytes_written = 0
+    chunk_size = 1024 * 1024  # 1MB
+    try:
+        with open(stored_path, "wb") as f:
+            while chunk := await file.read(chunk_size):
+                bytes_written += len(chunk)
+                if bytes_written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds the {MAX_UPLOAD_BYTES} byte upload limit",
+                    )
+                f.write(chunk)
+    except HTTPException:
+        stored_path.unlink(missing_ok=True)
+        raise
+    except Exception:
+        # Any other failure mid-write (disk full, client disconnect, etc.) must not
+        # leave a partial file behind either -- HTTPException isn't the only way
+        # this loop can fail.
+        stored_path.unlink(missing_ok=True)
+        logger.exception("Upload write failed")
+        raise HTTPException(status_code=500, detail="Upload failed") from None
 
     # Get video info
-    cap = cv2.VideoCapture(str(temp_path))
+    cap = cv2.VideoCapture(str(stored_path))
     if not cap.isOpened():
-        return {"error": "Could not open video"}
+        cap.release()
+        stored_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Could not open video")
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -96,8 +181,8 @@ async def upload_video(file: UploadFile = File(...)):
     cap.release()
 
     return {
-        "filename": file.filename,
-        "path": str(temp_path),
+        "filename": original_name,
+        "path": str(stored_path),
         "fps": fps,
         "frames": frames,
         "duration": round(duration, 2),
@@ -114,79 +199,97 @@ async def websocket_process(websocket: WebSocket):
         data = await websocket.receive_json()
         video_path = data.get("video_path")
 
-        if not video_path or not Path(video_path).exists():
+        # Confine processing to files under UPLOAD_DIR -- resolve() collapses any
+        # ".."/symlink components before the containment check, so this can't be
+        # spoofed by a crafted relative path the way string-prefix matching could.
+        # The error message is deliberately identical for "doesn't exist" and
+        # "exists but outside UPLOAD_DIR": diverging them would let a client use the
+        # response to probe which paths exist anywhere on the server filesystem.
+        requested = Path(video_path).resolve() if video_path else None
+        if (
+            not requested
+            or not requested.is_file()
+            or not requested.is_relative_to(UPLOAD_DIR.resolve())
+        ):
             await websocket.send_json({"error": "Video not found"})
             return
 
         # Initialize monitor
-        cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap = cv2.VideoCapture(str(requested))
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        monitor = HeartRateMonitor(fps=fps, method="chrom")
+            monitor = HeartRateMonitor(fps=fps, method="chrom")
 
-        await websocket.send_json({"type": "info", "fps": fps, "total_frames": total_frames})
+            await websocket.send_json({"type": "info", "fps": fps, "total_frames": total_frames})
 
-        # Process frames
-        frame_idx = 0
-        heart_rates = []
+            # Process frames
+            frame_idx = 0
+            heart_rates = []
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-            # Process frame
-            result = monitor.process_frame(frame)
+                # Process frame
+                result = monitor.process_frame(frame)
 
-            # Store HR
-            hr = result["heart_rate"]
-            if hr > 0:
-                heart_rates.append(hr)
+                # Store HR
+                hr = result["heart_rate"]
+                if hr > 0:
+                    heart_rates.append(hr)
 
-            # Send update every 10 frames
-            if frame_idx % 10 == 0:
-                # Encode frame as base64
-                _, buffer = cv2.imencode(
-                    ".jpg", result["frame_annotated"], [cv2.IMWRITE_JPEG_QUALITY, 50]
-                )
-                frame_b64 = base64.b64encode(buffer).decode("utf-8")
+                # Send update every 10 frames
+                if frame_idx % 10 == 0:
+                    # Encode frame as base64
+                    _, buffer = cv2.imencode(
+                        ".jpg", result["frame_annotated"], [cv2.IMWRITE_JPEG_QUALITY, 50]
+                    )
+                    frame_b64 = base64.b64encode(buffer).decode("utf-8")
 
-                avg_hr = np.mean(heart_rates) if heart_rates else 0
+                    avg_hr = np.mean(heart_rates) if heart_rates else 0
 
+                    await websocket.send_json(
+                        {
+                            "type": "frame",
+                            "frame_idx": frame_idx,
+                            "total_frames": total_frames,
+                            # Some containers (e.g. certain .webm encodes) report a
+                            # zero frame count from cv2.CAP_PROP_FRAME_COUNT; guard
+                            # against dividing by that rather than aborting the
+                            # whole session over a cosmetic progress percentage.
+                            "progress": (
+                                round(frame_idx / total_frames * 100, 1) if total_frames else 0
+                            ),
+                            "heart_rate": round(hr, 1),
+                            "avg_heart_rate": round(avg_hr, 1),
+                            "confidence": round(result["confidence"], 2),
+                            "status": result["status"],
+                            "frame": frame_b64,
+                        }
+                    )
+
+                    # Small delay for browser to process
+                    await asyncio.sleep(0.01)
+
+                frame_idx += 1
+
+            # Send final results
+            if heart_rates:
                 await websocket.send_json(
                     {
-                        "type": "frame",
-                        "frame_idx": frame_idx,
-                        "total_frames": total_frames,
-                        "progress": round(frame_idx / total_frames * 100, 1),
-                        "heart_rate": round(hr, 1),
-                        "avg_heart_rate": round(avg_hr, 1),
-                        "confidence": round(result["confidence"], 2),
-                        "status": result["status"],
-                        "frame": frame_b64,
+                        "type": "complete",
+                        "avg_heart_rate": round(np.mean(heart_rates), 1),
+                        "min_heart_rate": round(np.min(heart_rates), 1),
+                        "max_heart_rate": round(np.max(heart_rates), 1),
+                        "std_heart_rate": round(np.std(heart_rates), 1),
+                        "total_measurements": len(heart_rates),
                     }
                 )
-
-                # Small delay for browser to process
-                await asyncio.sleep(0.01)
-
-            frame_idx += 1
-
-        cap.release()
-
-        # Send final results
-        if heart_rates:
-            await websocket.send_json(
-                {
-                    "type": "complete",
-                    "avg_heart_rate": round(np.mean(heart_rates), 1),
-                    "min_heart_rate": round(np.min(heart_rates), 1),
-                    "max_heart_rate": round(np.max(heart_rates), 1),
-                    "std_heart_rate": round(np.std(heart_rates), 1),
-                    "total_measurements": len(heart_rates),
-                }
-            )
+        finally:
+            cap.release()
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")
@@ -201,66 +304,119 @@ async def health():
     return {"status": "ok", "message": "rPPG server running"}
 
 
-# Global monitor for webcam mode
-webcam_monitor: HeartRateMonitor | None = None
-webcam_heart_rates = []
+def _decode_webcam_frame(frame_b64: str) -> np.ndarray | None:
+    """Decode a base64-encoded JPEG frame into a BGR image array, or None on failure.
 
-
-@app.post("/process_frame")
-async def process_frame(request: Request):
-    """Process a single frame from webcam."""
-    global webcam_monitor, webcam_heart_rates
-
-    data = await request.json()
-    frame_b64 = data.get("frame")
-
-    if not frame_b64:
-        return {"error": "No frame data"}
-
-    # Decode frame
+    A malformed base64 payload must degrade to "skip this one frame" (matching the
+    already-established behavior for a frame cv2 fails to decode), not propagate out
+    and kill the whole WebSocket session -- unlike the old per-request /process_frame
+    design, one bad frame here would otherwise end the entire connection.
+    """
     try:
-        frame_data = base64.b64decode(frame_b64)
-        nparr = np.frombuffer(frame_data, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-        if frame is None:
-            return {"error": "Could not decode frame"}
-
-        # Initialize monitor if needed
-        if webcam_monitor is None:
-            webcam_monitor = HeartRateMonitor(fps=30.0, method="chrom")
-            webcam_heart_rates = []
-
-        # Process frame
-        result = webcam_monitor.process_frame(frame)
-
-        # Store HR
-        hr = result["heart_rate"]
-        if hr > 0:
-            webcam_heart_rates.append(hr)
-            if len(webcam_heart_rates) > 300:  # Keep last 10 seconds at 30 fps
-                webcam_heart_rates.pop(0)
-
-        avg_hr = np.mean(webcam_heart_rates) if webcam_heart_rates else 0
-
-        return {
-            "heart_rate": round(hr, 1),
-            "avg_heart_rate": round(avg_hr, 1),
-            "confidence": round(result["confidence"], 2),
-            "status": result["status"],
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
+        frame_data = base64.b64decode(frame_b64, validate=True)
+    except (ValueError, TypeError):
+        return None
+    nparr = np.frombuffer(frame_data, np.uint8)
+    return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
 
-@app.post("/reset_webcam")
-async def reset_webcam():
-    """Reset webcam monitor state."""
-    global webcam_monitor, webcam_heart_rates
-    webcam_monitor = None
-    webcam_heart_rates = []
-    return {"status": "reset"}
+@app.websocket("/ws/webcam")
+async def websocket_webcam(websocket: WebSocket):
+    """WebSocket endpoint for real-time webcam heart rate monitoring.
+
+    Each connection gets its own HeartRateMonitor and HR history -- mirroring the
+    already-correct per-connection pattern in websocket_process (above). This
+    replaces a POST-polling design (formerly /process_frame + /reset_webcam) that
+    shared module-level global state across every concurrent user, corrupting one
+    user's readings with another's and letting one user's "reset" wipe everyone's
+    session. Connection lifetime now IS session lifetime: closing the socket is the
+    reset, no separate reset endpoint needed.
+    """
+    await websocket.accept()
+    monitor: HeartRateMonitor | None = None
+    heart_rates: list[float] = []
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            frame_b64 = data.get("frame")
+            if not frame_b64:
+                await websocket.send_json({"error": "No frame data"})
+                continue
+
+            frame = _decode_webcam_frame(frame_b64)
+            if frame is None:
+                await websocket.send_json({"error": "Could not decode frame"})
+                continue
+
+            if monitor is None:
+                monitor = HeartRateMonitor(fps=30.0, method="chrom")
+
+            result = monitor.process_frame(frame)
+
+            hr = result["heart_rate"]
+            if hr > 0:
+                heart_rates.append(hr)
+                if len(heart_rates) > 300:  # Keep last 10 seconds at 30 fps
+                    heart_rates.pop(0)
+
+            avg_hr = np.mean(heart_rates) if heart_rates else 0
+
+            await websocket.send_json(
+                {
+                    "heart_rate": round(hr, 1),
+                    "avg_heart_rate": round(avg_hr, 1),
+                    "confidence": round(result["confidence"], 2),
+                    "status": result["status"],
+                }
+            )
+    except WebSocketDisconnect:
+        logger.info("Webcam client disconnected")
+    except Exception:
+        logger.exception("Error during webcam WebSocket processing")
+
+
+def _validate_chart_payload(data: dict) -> tuple[list[float], list[float], float, float, float]:
+    """Validate /export_chart's JSON body. Raises HTTPException(400) on any problem.
+
+    Guards against malformed input reaching matplotlib mid-render, which previously
+    surfaced as a 200-status JSON error body that the frontend's `response.ok` check
+    would treat as success and try to download as a broken PNG.
+    """
+    hr_timeline = data.get("hr_timeline")
+    timestamps = data.get("timestamps")
+    avg_hr = data.get("avg_hr", 0)
+    min_hr = data.get("min_hr", 0)
+    max_hr = data.get("max_hr", 0)
+
+    if not isinstance(hr_timeline, list) or not isinstance(timestamps, list):
+        raise HTTPException(status_code=400, detail="hr_timeline and timestamps must be arrays")
+    if not hr_timeline or not timestamps:
+        raise HTTPException(status_code=400, detail="No data to export")
+    if len(hr_timeline) != len(timestamps):
+        raise HTTPException(
+            status_code=400, detail="hr_timeline and timestamps must be the same length"
+        )
+
+    def _finite_floats(values, name: str) -> list[float]:
+        try:
+            floats = [float(v) for v in values]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail=f"{name} must contain only numbers"
+            ) from exc
+        if not all(math.isfinite(v) for v in floats):
+            raise HTTPException(status_code=400, detail=f"{name} must contain only finite numbers")
+        return floats
+
+    hr_timeline = _finite_floats(hr_timeline, "hr_timeline")
+    timestamps = _finite_floats(timestamps, "timestamps")
+
+    for name, value in (("avg_hr", avg_hr), ("min_hr", min_hr), ("max_hr", max_hr)):
+        if not isinstance(value, int | float) or not math.isfinite(value):
+            raise HTTPException(status_code=400, detail=f"{name} must be a finite number")
+
+    return hr_timeline, timestamps, float(avg_hr), float(min_hr), float(max_hr)
 
 
 @app.post("/export_chart")
@@ -269,17 +425,10 @@ async def export_chart(request: Request):
     Export heart rate chart as PNG image.
     Generates a report similar to physnet_results.png
     """
+    data = await request.json()
+    hr_timeline, timestamps, avg_hr, min_hr, max_hr = _validate_chart_payload(data)
+
     try:
-        data = await request.json()
-        hr_timeline = data.get("hr_timeline", [])
-        timestamps = data.get("timestamps", [])
-        avg_hr = data.get("avg_hr", 0)
-        min_hr = data.get("min_hr", 0)
-        max_hr = data.get("max_hr", 0)
-
-        if not hr_timeline:
-            return {"error": "No data to export"}
-
         # Create figure with 2 subplots
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
         fig.suptitle("rPPG Heart Rate Detection Report", fontsize=16, fontweight="bold")
@@ -356,23 +505,34 @@ async def export_chart(request: Request):
         buf.seek(0)
         plt.close(fig)
 
-        # Save to temp file and return
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        temp_file.write(buf.getvalue())
-        temp_file.close()
-
-        return FileResponse(
-            temp_file.name, media_type="image/png", filename=f"rppg_report_{int(time.time())}.png"
+        # Stream the already-in-memory PNG bytes directly -- no reason for this to
+        # touch disk at all, which sidesteps the temp-file-cleanup problem entirely
+        # rather than needing a BackgroundTask to remember to clean one up.
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f'attachment; filename="rppg_report_{int(time.time())}.png"'
+            },
         )
 
-    except Exception as e:
-        return {"error": str(e)}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Chart export failed")
+        raise HTTPException(status_code=500, detail="Chart export failed") from None
 
 
 if __name__ == "__main__":
 
     import uvicorn
 
+    # Loopback-only by default -- binding to all interfaces (0.0.0.0) is an
+    # explicit opt-in for containerized/production deployment, not a hardcoded
+    # default, since this dev server has no auth layer of its own.
+    host = os.getenv("RPPG_HOST", "127.0.0.1")
+    port = int(os.getenv("RPPG_PORT", "8000"))
+
     print("Starting rPPG Dashboard Server...")
-    print("Open http://localhost:8000 in your browser")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print(f"Open http://{host}:{port} in your browser")
+    uvicorn.run(app, host=host, port=port)

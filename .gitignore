@@ -35,6 +35,10 @@ models/*.onnx
 *.mp4
 *.avi
 *.mov
+*.webm
+
+# User-uploaded videos (runtime data, never committed)
+src/app/uploads/
 
 # Datasets (not included in repo)
 datasets/
